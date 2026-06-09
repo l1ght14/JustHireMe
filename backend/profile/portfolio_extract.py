@@ -180,10 +180,10 @@ async def _extract_with_llm(url: str, pages: list[PageSnapshot], deterministic: 
     try:
         if os.getenv("JHM_PORTFOLIO_LLM", "").strip().lower() not in {"1", "true", "yes", "on"}:
             return None
-        from llm import _resolve
+        from llm import _resolve, provider_needs_key
 
         provider, api_key, _model = _resolve("ingestor")
-        if provider != "ollama" and not api_key:
+        if provider_needs_key(provider) and not api_key:
             return None
         from llm import acall_llm
 

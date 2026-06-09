@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 
 from api.dependencies import get_repository
@@ -14,4 +16,4 @@ async def get_events_endpoint(
     job_id: str | None = None,
     repo: Repository = Depends(get_repository),
 ):
-    return repo.events.get_events(limit=limit, job_id=job_id)
+    return await asyncio.to_thread(repo.events.get_events, limit=limit, job_id=job_id)

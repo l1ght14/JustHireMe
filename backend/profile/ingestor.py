@@ -13,12 +13,12 @@ from profile.ingest_parse import _parse_resume_heuristic as _parse_resume_heuris
 _log = get_logger(__name__)
 
 def run(raw: str = "", pdf: str | None = None) -> C:
-    from llm import call_llm, resolve_config
+    from llm import call_llm, provider_needs_key, resolve_config
 
     txt = (raw + " " + _document(pdf)).strip() if pdf else raw
     p, k, _model = resolve_config("ingestor")
 
-    if p != "ollama" and not k:
+    if provider_needs_key(p) and not k:
         _log.warning(
             "provider='%s' but no API key set - using local parser. "
             "Open Settings and add your API key for AI-powered extraction.",

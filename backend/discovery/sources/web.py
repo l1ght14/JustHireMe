@@ -121,7 +121,7 @@ def parse(md: str, src: str) -> list:
         d = lead.model_dump()
         if fresh_search_source and not d.get("posted_date"):
             d["_fresh_source"] = "google_past_week"
-        if is_recent(d.get("posted_date", "")):
+        if d.get("_fresh_source") or is_recent(d.get("posted_date", "")):
             results.append(d)
         else:
             _log.debug("Skipping old listing (%s): %s", d.get("posted_date", ""), d.get("title", ""))
@@ -154,7 +154,7 @@ def parse_wellfound(md: str, src: str) -> list:
         d = lead.model_dump()
         if fresh_search_source and not d.get("posted_date"):
             d["_fresh_source"] = "google_past_week"
-        if is_recent(d.get("posted_date", "")):
+        if d.get("_fresh_source") or is_recent(d.get("posted_date", "")):
             d["platform"] = "wellfound"
             results.append(d)
     return results

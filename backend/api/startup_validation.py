@@ -21,7 +21,7 @@ def startup_warnings(repo: Repository) -> list[str]:
         warnings.append("Custom connectors are enabled but custom_connectors is empty.")
 
     provider = str(cfg.get("llm_provider") or "ollama").strip().lower()
-    if provider and provider != "ollama":
+    if provider and provider not in ("ollama", "claude_cli", "codex_cli"):  # CLIs use a subscription, not a key
         from llm import _ENV_NAMES, _KEY_NAMES
 
         key_name = _KEY_NAMES.get(provider, "")

@@ -4,10 +4,11 @@ from collections.abc import Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from api.auth import LOCAL_ORIGIN_RE, require_http_token
 from api.dependencies import get_event_bus
-from api.routers import automation, diagnostics, discovery, events, generation, health, ingestion, internal, leads, misc, profile, runtime, settings, templates
+from api.routers import automation, diagnostics, discovery, events, generation, health, ingestion, leads, misc, profile, runtime, settings, templates
 from api.websocket import register_websocket
 from core.telemetry import record_exception
 from core.version import APP_VERSION
@@ -32,7 +33,6 @@ def create_app(
     connection_manager=None,
     logger=None,
     websocket_token_guard=None,
-    internal_token: str = "",
 ) -> FastAPI:
     app = FastAPI(
         title="JustHireMe",
@@ -46,7 +46,6 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.internal_token = internal_token
     app.state.connection_manager = connection_manager
     app.state.token_getter = token_getter
 
@@ -62,9 +61,18 @@ def create_app(
             record_exception(exc, domain="api", request_id=request_id, path=request.url.path)
             raise
 
+    @app.exception_handler(Exception)
+    async def _unhandled_exception(request: Request, exc: Exception):
+        # Never leak internal exception text to the client; the middleware above
+        # already recorded the detail server-side. Return a generic 500 + the
+        # request id so a user-reported failure can be correlated to the log.
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "request_id": request.headers.get("x-request-id", "")},
+        )
+
     app.include_router(health.create_router(started_at))
     app.include_router(diagnostics.create_router(started_at))
-    app.include_router(internal.router)
     app.include_router(events.router)
     app.include_router(misc.router)
     app.include_router(runtime.router)

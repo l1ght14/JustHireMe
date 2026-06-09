@@ -214,16 +214,16 @@ def create_router(scheduler: AsyncIOScheduler, ghost_tick) -> APIRouter:
 
     @router.get("/template")
     async def get_template(repo: Repository = Depends(get_repository)):
-        return {"template": repo.settings.get_setting("resume_template", "")}
+        return {"template": await asyncio.to_thread(repo.settings.get_setting, "resume_template", "")}
 
     @router.post("/template")
     async def save_template(body: TemplateBody, repo: Repository = Depends(get_repository)):
-        repo.settings.save_settings({"resume_template": body.template})
+        await asyncio.to_thread(repo.settings.save_settings, {"resume_template": body.template})
         return {"ok": True}
 
     @router.get("/settings")
     async def get_cfg(repo: Repository = Depends(get_repository)):
-        settings = repo.settings.get_settings()
+        settings = await asyncio.to_thread(repo.settings.get_settings)
         for key in sensitive_keys(settings):
             if settings.get(key):
                 settings[key] = MASK
@@ -259,15 +259,39 @@ def create_router(scheduler: AsyncIOScheduler, ghost_tick) -> APIRouter:
     async def post_provider_models(provider: str, body: SettingsBody, repo: Repository = Depends(get_repository)):
         return await _provider_models_response(provider, body.model_dump(), repo)
 
+    @router.get("/settings/subscription-status")
+    async def subscription_status():
+        """Install + login state for the subscription-CLI providers (no API key needed)."""
+        from llm import subscription_cli
+        out = {}
+        for p in ("claude_cli", "codex_cli"):
+            s = subscription_cli.status(p)
+            if not s.get("installed"):
+                s["install_hint"] = subscription_cli.install_hint(p)
+            out[p] = s
+        return out
+
+    @router.post("/settings/subscription-login/{provider}")
+    async def subscription_login(provider: str):
+        """Launch the CLI's own browser sign-in; the UI then polls subscription-status."""
+        from llm import subscription_cli
+        if provider not in ("claude_cli", "codex_cli"):
+            raise HTTPException(status_code=400, detail="unknown subscription provider")
+        try:
+            return subscription_cli.login(provider)
+        except subscription_cli.CliNotInstalled as exc:
+            return {"started": False, "error": "not_installed",
+                    "hint": subscription_cli.install_hint(provider), "detail": str(exc)}
+
     @router.post("/settings")
     async def save_cfg(body: SettingsBody, repo: Repository = Depends(get_repository)):
         payload = {key: "" if value is None else str(value) for key, value in body.model_dump().items()}
-        old = repo.settings.get_settings()
+        old = await asyncio.to_thread(repo.settings.get_settings)
         for key in sensitive_keys({**old, **payload}):
             if payload.get(key) in LEGACY_MASKS:
                 payload[key] = old.get(key, "")
         try:
-            repo.settings.save_settings(payload)
+            await asyncio.to_thread(repo.settings.save_settings, payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if payload.get("ghost_mode") == "true":

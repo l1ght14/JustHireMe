@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import re
 import threading
 from datetime import datetime, timezone, timedelta
@@ -8,6 +7,7 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from discovery.lead_intel import canonical_lead_id
 from discovery.quality_gate import MIN_DEFAULT_QUALITY, attach_quality_metadata, evaluate_lead_quality
 from discovery.sources import apify as apify_sources
 from discovery.sources import ats as ats_sources
@@ -171,12 +171,14 @@ def _parse_date(s: str) -> datetime | None:
 
 
 def _is_recent(date_str: str) -> bool:
-    """Return True if the date is within _MAX_AGE_DAYS, or if date is unknown."""
+    """Fail closed: True only for a date confirmed within _MAX_AGE_DAYS. Empty or
+    unparseable dates are treated as NOT recent; callers with a fresh-source hint
+    override at the call site."""
     if not date_str:
-        return True   # no date info → include (don't discard on uncertainty)
+        return False
     dt = _parse_date(date_str)
     if dt is None:
-        return True   # unparseable → include
+        return False
     return dt >= _cutoff()
 
 
@@ -268,10 +270,6 @@ def _passes_beginner_job_filter(lead: dict) -> bool:
     return _is_beginner_role(lead)
 
 
-def _h(u: str) -> str:
-    return hashlib.md5(u.encode()).hexdigest()[:16]
-
-
 def _to_md(html: str) -> str:
     return web_sources.to_markdown(html)
 
@@ -318,7 +316,7 @@ def _parse(md: str, src: str) -> list:
         d = lead.model_dump()
         if fresh_search_source and not d.get("posted_date"):
             d["_fresh_source"] = "google_past_week"
-        if _is_recent(d.get("posted_date", "")):
+        if d.get("_fresh_source") or _is_recent(d.get("posted_date", "")):
             results.append(d)
         else:
             _log.debug("Skipping old listing (%s): %s", d.get("posted_date", ""), d.get("title", ""))
@@ -350,7 +348,7 @@ def _parse_wellfound(md: str, src: str) -> list:
         d = lead.model_dump()
         if fresh_search_source and not d.get("posted_date"):
             d["_fresh_source"] = "google_past_week"
-        if _is_recent(d.get("posted_date", "")):
+        if d.get("_fresh_source") or _is_recent(d.get("posted_date", "")):
             d["platform"] = "wellfound"
             results.append(d)
     return results
@@ -609,7 +607,7 @@ def run(
         if not u:
             usage["missing_url"] += 1
             continue
-        jid = _h(u)
+        jid = canonical_lead_id(u)
         if url_exists(jid):
             usage["duplicates"] += 1
             continue

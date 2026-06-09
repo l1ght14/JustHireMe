@@ -15,6 +15,7 @@ export interface Cfg {
   azure_openai_api_key: string; azure_model: string; azure_openai_endpoint: string;
   custom_api_key: string; custom_model: string; custom_base_url: string;
   ollama_url: string;
+  claude_cli_model: string; codex_cli_model: string;
   scout_provider: string;     scout_api_key: string;     scout_model: string;
   evaluator_provider: string; evaluator_api_key: string; evaluator_model: string;
   generator_provider: string; generator_api_key: string; generator_model: string;
@@ -43,6 +44,7 @@ export const EMPTY: Cfg = {
   azure_openai_api_key: "", azure_model: "gpt-4o-mini", azure_openai_endpoint: "",
   custom_api_key: "", custom_model: "model-id", custom_base_url: "https://api.openai.com/v1",
   ollama_url: "http://localhost:11434/v1",
+  claude_cli_model: "claude-sonnet-4-6", codex_cli_model: "gpt-5-codex",
   scout_provider: "", scout_api_key: "", scout_model: "",
   evaluator_provider: "", evaluator_api_key: "", evaluator_model: "",
   generator_provider: "", generator_api_key: "", generator_model: "",
@@ -58,6 +60,8 @@ export const EMPTY: Cfg = {
 };
 
 export const PROVIDERS = [
+  { id: "claude_cli", label: "Claude · sub", tone: "purple", sub: "Your plan" },
+  { id: "codex_cli",  label: "Codex · sub",  tone: "blue",   sub: "Your plan" },
   { id: "gemini",    label: "Gemini",    tone: "green",  sub: "2.5 Flash" },
   { id: "deepseek",  label: "DeepSeek",  tone: "teal",   sub: "V3 / R1"   },
   { id: "nvidia",    label: "NVIDIA",    tone: "green",  sub: "GLM / NIM" },
@@ -81,6 +85,10 @@ export const PROVIDERS = [
   { id: "ollama",    label: "Ollama",    tone: "pink",   sub: "Local"     },
 ];
 
+// Providers that use the user's own logged-in CLI subscription (no API key).
+export const SUBSCRIPTION_PROVIDERS = new Set(["claude_cli", "codex_cli"]);
+export const isSubscriptionProvider = (id: string) => SUBSCRIPTION_PROVIDERS.has(id);
+
 export const MODEL_HINTS: Record<string, string[]> = {
   gemini:    ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
   deepseek:  ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
@@ -100,9 +108,11 @@ export const MODEL_HINTS: Record<string, string[]> = {
   qwen:      ["qwen-plus", "qwen-max", "qwen-turbo", "qwen3-coder-plus"],
   azure:     ["gpt-4o-mini", "gpt-4o", "gpt-4.1", "deployment-name"],
   openai:    ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-4o-mini", "gpt-4o"],
-  anthropic: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6"],
+  anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"],
   custom:    ["model-id", "provider/model", "chat-model"],
   ollama:    ["llama3", "mistral", "gemma2", "codellama"],
+  claude_cli: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-opus-4-7", "claude-haiku-4-5-20251001"],
+  codex_cli:  ["gpt-5-codex", "gpt-5.1", "gpt-5"],
 };
 
 export const STEPS = [
@@ -187,6 +197,8 @@ export const GLOBAL_MODEL_FIELD: Record<string, keyof Cfg> = {
   qwen: "qwen_model",
   azure: "azure_model",
   custom: "custom_model",
+  claude_cli: "claude_cli_model",
+  codex_cli: "codex_cli_model",
 };
 
 const SECRET_MASK = "__JHM_SECRET_SET__";
@@ -277,7 +289,7 @@ export function ModelChips({ provider, value, onChange, extraModels = [] }: { pr
 export function ApiKeyInput({ value, onChange, provider, isStep, disabled = false, placeholder }: {
   value: string; onChange: (v: string) => void; provider: string; isStep?: boolean; disabled?: boolean; placeholder?: string;
 }) {
-  if (provider === "ollama") return null;
+  if (provider === "ollama" || isSubscriptionProvider(provider)) return null;
   const ph: Record<string, string> = {
     anthropic: "sk-ant-****", gemini: "AIza****", groq: "gsk_****", nvidia: "nvapi-****",
     openai: "sk-****", deepseek: "sk-****", xai: "xai-****", kimi: "sk-****",
@@ -291,6 +303,69 @@ export function ApiKeyInput({ value, onChange, provider, isStep, disabled = fals
       className="mono field-input"
       style={{ width: "100%", padding: "9px 12px", borderRadius: 9, border: "1px solid var(--line)", background: disabled ? "var(--paper-3)" : "var(--card)", fontSize: 12, opacity: disabled ? 0.75 : 1, cursor: disabled ? "not-allowed" : "text" }}
     />
+  );
+}
+
+export interface SubStatus {
+  installed: boolean;
+  logged_in: boolean;
+  email?: string | null;
+  plan?: string | null;
+  install_hint?: { name: string; cmd: string; url: string; after?: string };
+}
+
+function subBadge(tone: string, text: React.ReactNode) {
+  const s = tone === "bad"
+    ? { background: "var(--bad-soft)", color: "var(--bad)", border: "1px solid var(--bad)" }
+    : { background: `var(--${tone}-soft)`, color: `var(--${tone}-ink)`, border: `1px solid var(--${tone})` };
+  return <span className="mono" style={{ alignSelf: "flex-start", fontSize: 10.5, padding: "3px 9px", borderRadius: 999, ...s }}>{text}</span>;
+}
+
+export function SubscriptionNote({ provider, status, onSignIn, busy }: {
+  provider: string;
+  status?: SubStatus;
+  onSignIn?: () => void;
+  busy?: boolean;
+}) {
+  const cli = provider === "claude_cli" ? "claude" : "codex";
+  const plan = provider === "claude_cli" ? "Claude (Pro / Max)" : "ChatGPT (Plus / Pro)";
+
+  let inner: React.ReactNode;
+  if (!status) {
+    inner = subBadge("yellow", `Checking for the ${cli} CLI…`);
+  } else if (!status.installed) {
+    const h = status.install_hint;
+    inner = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {subBadge("bad", `${cli} CLI not installed`)}
+        {h && <>
+          <div style={{ fontSize: 11.5, color: "var(--ink-3)" }}>Install it, then click Sign in:</div>
+          <code style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, background: "var(--paper-3)", border: "1px solid var(--line)", borderRadius: 7, padding: "6px 9px", userSelect: "all" }}>{h.cmd}</code>
+          <a href={h.url} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: "var(--accent)" }}>installation guide ↗</a>
+        </>}
+      </div>
+    );
+  } else if (!status.logged_in) {
+    inner = (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {subBadge("yellow", `${cli} CLI found — not signed in`)}
+        <button className="btn" onClick={onSignIn} disabled={busy} style={{ fontSize: 12 }}>
+          {busy ? "Opening sign-in…" : "Sign in"}
+        </button>
+        <span style={{ fontSize: 11, color: "var(--ink-3)" }}>opens a browser to your {plan} account</span>
+      </div>
+    );
+  } else {
+    inner = subBadge("green", `Signed in${status.email ? ` as ${status.email}` : ""}${status.plan ? ` · ${status.plan} plan` : ""} — ready`);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 9, padding: "11px 13px", borderRadius: 11, background: "var(--paper-2)", border: "1px solid var(--line)" }}>
+      <div style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
+        Runs on <b>your {plan} subscription</b> through the <span className="mono">{cli}</span> CLI — <b>no API key</b>. Your own local automation; usage draws from your plan, not per-token billing.
+      </div>
+      {inner}
+    </div>
   );
 }
 

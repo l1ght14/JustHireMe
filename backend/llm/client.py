@@ -30,6 +30,46 @@ _RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry → 1s, 2s, 4s
 # Keeping LLM calls on their own pool caps the blast radius at max_workers.
 LLM_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm")
 
+# Cache constructed SDK clients so each LLM call reuses the underlying httpx
+# connection pool / TLS session instead of paying full client + TLS setup every
+# call. Keyed by the exact constructor kwargs (via repr, since httpx.Timeout is
+# not hashable) so different base_url/key/timeout/max_retries configs get
+# distinct clients. OpenAI/Anthropic clients are documented thread-safe, so
+# sharing one across the bounded LLM pool is safe.
+_CLIENT_CACHE: dict = {}
+_CLIENT_CACHE_LOCK = threading.Lock()
+
+
+def _cached_raw_client(kind: str, factory, **kwargs):
+    key = (kind, tuple(sorted((name, repr(val)) for name, val in kwargs.items())))
+    client = _CLIENT_CACHE.get(key)
+    if client is not None:
+        return client
+    with _CLIENT_CACHE_LOCK:
+        client = _CLIENT_CACHE.get(key)
+        if client is None:
+            client = factory(**kwargs)
+            _CLIENT_CACHE[key] = client
+        return client
+
+
+def _openai(**kwargs) -> OpenAI:
+    """Cached raw OpenAI client (shared httpx pool). Wrap with instructor per
+    call where structured output is needed — instructor.from_openai does not
+    mutate the passed client, so re-wrapping a cached client is safe."""
+    return _cached_raw_client("openai", OpenAI, **kwargs)
+
+
+def _anthropic(**kwargs):
+    """Cached raw Anthropic client (shared httpx pool)."""
+    return _cached_raw_client("anthropic", anthropic.Anthropic, **kwargs)
+
+
+def reset_client_cache() -> None:
+    """Drop all cached SDK clients (used by tests / after a key change)."""
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.clear()
+
 
 async def acall_llm(s: str, u: str, m: type[BaseModel], step: str | None = None):
     """Async wrapper that runs call_llm on the dedicated LLM thread pool (H5)."""
@@ -184,6 +224,8 @@ _DEFAULT_MODELS: dict[str, str] = {
     "azure": "gpt-4o-mini",
     "custom":    "model-id",
     "ollama":    "llama3",
+    "claude_cli": "claude-sonnet-4-6",  # uses the user's Claude subscription via the claude CLI (no API key)
+    "codex_cli":  "gpt-5-codex",         # uses the user's ChatGPT subscription via the codex CLI (no API key)
 }
 
 _OPENAI_COMPAT_BASE_URLS: dict[str, str] = {
@@ -203,6 +245,16 @@ _OPENAI_COMPAT_BASE_URLS: dict[str, str] = {
 
 _OPENAI_COMPAT_PROVIDERS = set(_OPENAI_COMPAT_BASE_URLS) | {"azure", "custom"}
 _BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+# Providers that authenticate WITHOUT an API key: ollama (local) and the
+# subscription CLIs (claude_cli / codex_cli, which use the user's own CLI login).
+# Centralized so every "needs a key?" check stays in sync.
+KEYLESS_PROVIDERS = frozenset({"ollama", "claude_cli", "codex_cli"})
+
+
+def provider_needs_key(provider: str) -> bool:
+    """True if the provider requires an API key (i.e. not ollama or a subscription CLI)."""
+    return provider not in KEYLESS_PROVIDERS
 
 
 def _validate_base_url(url: str) -> str:
@@ -286,7 +338,7 @@ def resolve_config(step: str | None = None) -> tuple[str, str, str]:
 
 def _client_nvidia(k: str):
     return instructor.from_openai(
-        OpenAI(
+        _openai(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=k,
             timeout=_TIMEOUT,
@@ -297,7 +349,7 @@ def _client_nvidia(k: str):
 
 
 def _client_gemini(k: str):
-    return OpenAI(
+    return _openai(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=k,
         timeout=_TIMEOUT,
@@ -306,7 +358,7 @@ def _client_gemini(k: str):
 
 
 def _client_openai_compat(provider: str, key: str):
-    return OpenAI(
+    return _openai(
         base_url=_provider_base_url(provider),
         api_key=key,
         timeout=_TIMEOUT,
@@ -326,6 +378,23 @@ def call_llm(s: str, u: str, m: type[BaseModel], step: str | None = None):
     return _retry_llm_call(lambda: _call_llm_once(s, u, m, step))
 
 
+def _subscription_call(provider, attempt, fallback, *, step):
+    """Run a subscription-CLI call, retrying once on a cold-start timeout, then
+    falling back gracefully on any other CLI failure (not-installed, login,
+    credit, malformed output). The first call after a sign-in/idle period often
+    times out while the runtime warms up but succeeds on the retry."""
+    from llm import subscription_cli as _sub
+    try:
+        try:
+            return attempt()
+        except _sub.CliTimeout:
+            _log.warning("%s subscription CLI timed out (step=%s) — retrying once", provider, step)
+            return attempt()
+    except _sub.CliError as exc:
+        _log.warning("%s subscription CLI failed (step=%s): %s", provider, step, exc)
+        return fallback()
+
+
 def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
     p, k, model = _resolve(step)
 
@@ -333,7 +402,7 @@ def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
         if not k:
             _log.warning("anthropic — no key (step=%s) — falling back", step)
             return _parse_fallback(u, m)
-        anthropic_client = anthropic.Anthropic(api_key=k, timeout=120.0)
+        anthropic_client = _anthropic(api_key=k, timeout=120.0)
         r = anthropic_client.messages.parse(
             model=model,
             max_tokens=4096,
@@ -348,8 +417,8 @@ def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
             _log.warning("groq — no key (step=%s) — falling back", step)
             return _parse_fallback(u, m)
         groq_client = instructor.from_openai(
-            OpenAI(base_url="https://api.groq.com/openai/v1", api_key=k,
-                   timeout=_TIMEOUT, max_retries=0)
+            _openai(base_url="https://api.groq.com/openai/v1", api_key=k,
+                    timeout=_TIMEOUT, max_retries=0)
         )
         return groq_client.chat.completions.create(
             model=model,
@@ -388,7 +457,7 @@ def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
         if not k:
             _log.warning("openai — no key (step=%s)", step)
             return _parse_fallback(u, m)
-        openai_client = instructor.from_openai(OpenAI(api_key=k, timeout=_TIMEOUT))
+        openai_client = instructor.from_openai(_openai(api_key=k, timeout=_TIMEOUT))
         return openai_client.chat.completions.create(
             model=model,
             response_model=m,
@@ -402,7 +471,7 @@ def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
         # deepseek-reasoner does not support tool_choice — use JSON mode instead
         mode = instructor.Mode.JSON if "reasoner" in model else instructor.Mode.TOOLS
         deepseek_client = instructor.from_openai(
-            OpenAI(base_url="https://api.deepseek.com", api_key=k, timeout=_TIMEOUT),
+            _openai(base_url="https://api.deepseek.com", api_key=k, timeout=_TIMEOUT),
             mode=mode,
         )
         return deepseek_client.chat.completions.create(
@@ -445,11 +514,20 @@ def _call_llm_once(s: str, u: str, m: type[BaseModel], step: str | None = None):
             messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
         )
 
+    elif p in ("claude_cli", "codex_cli"):
+        # Subscription providers: shell out to the user's logged-in Claude/Codex CLI
+        # (no API key). The CLI returns text, so we ask for schema-shaped JSON and parse.
+        from llm import subscription_cli as _sub
+        return _subscription_call(
+            p, lambda: _sub.complete_structured(p, s, u, m, model=model),
+            lambda: _parse_fallback(u, m), step=step,
+        )
+
     else:  # ollama / default
         b = get_setting("ollama_url", "http://localhost:11434/v1")
         _log.info("ollama at %s model=%s (step=%s)", b, model, step)
         ollama_client = instructor.from_openai(
-            OpenAI(base_url=b, api_key="ollama", timeout=_TIMEOUT, max_retries=0)
+            _openai(base_url=b, api_key="ollama", timeout=_TIMEOUT, max_retries=0)
         )
         return ollama_client.chat.completions.create(
             model=model,
@@ -476,7 +554,7 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
     if p == "anthropic":
         if not k:
             return ""
-        anthropic_client = anthropic.Anthropic(api_key=k, timeout=120.0)
+        anthropic_client = _anthropic(api_key=k, timeout=120.0)
         anthropic_response = anthropic_client.messages.create(
             model=model,
             max_tokens=4096,
@@ -488,7 +566,7 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
     elif p == "groq":
         if not k:
             return ""
-        groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=k,
+        groq_client = _openai(base_url="https://api.groq.com/openai/v1", api_key=k,
                    timeout=_TIMEOUT, max_retries=0)
         groq_response = groq_client.chat.completions.create(
             model=model,
@@ -509,7 +587,7 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
     elif p == "nvidia":
         if not k:
             return ""
-        nvidia_client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=k,
+        nvidia_client = _openai(base_url="https://integrate.api.nvidia.com/v1", api_key=k,
                    timeout=_TIMEOUT, max_retries=0)
         nvidia_response = nvidia_client.chat.completions.create(
             model=model,
@@ -522,7 +600,7 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
     elif p == "openai":
         if not k:
             return ""
-        openai_client = OpenAI(api_key=k, timeout=_TIMEOUT)
+        openai_client = _openai(api_key=k, timeout=_TIMEOUT)
         openai_response = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
@@ -532,7 +610,7 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
     elif p == "deepseek":
         if not k:
             return ""
-        deepseek_client = OpenAI(base_url="https://api.deepseek.com", api_key=k, timeout=_TIMEOUT)
+        deepseek_client = _openai(base_url="https://api.deepseek.com", api_key=k, timeout=_TIMEOUT)
         deepseek_response = deepseek_client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
@@ -560,9 +638,15 @@ def _call_raw_once(s: str, u: str, step: str | None = None) -> str:
         )
         return compat_chat_response.choices[0].message.content or ""
 
+    elif p in ("claude_cli", "codex_cli"):
+        from llm import subscription_cli as _sub
+        return _subscription_call(
+            p, lambda: _sub.complete_text(p, s, u, model=model), lambda: "", step=step,
+        )
+
     else:  # ollama
         b = get_setting("ollama_url", "http://localhost:11434/v1")
-        ollama_client = OpenAI(base_url=b, api_key="ollama", timeout=_TIMEOUT, max_retries=0)
+        ollama_client = _openai(base_url=b, api_key="ollama", timeout=_TIMEOUT, max_retries=0)
         ollama_response = ollama_client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],

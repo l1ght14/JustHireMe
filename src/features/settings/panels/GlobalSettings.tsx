@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { settingsApi } from "../../../api/settings";
 import type { Cfg } from "./shared";
-import { ApiKeyInput, GLOBAL_MODEL_FIELD, KEY_FIELD, ModelChips, ProviderPills, SectionLabel } from "./shared";
+import { ApiKeyInput, GLOBAL_MODEL_FIELD, isSubscriptionProvider, KEY_FIELD, ModelChips, ProviderPills, SectionLabel, SubscriptionNote, type SubStatus } from "./shared";
 import type { ApiFetch } from "../../../types";
 
 type KeyStatus = "ok" | "invalid_key" | "unreachable" | "not_configured" | "unchecked";
@@ -13,6 +13,34 @@ export function GlobalSettings({ cfg, set, onChange, prov, api }: { cfg: Cfg; se
   const [results, setResults] = useState<ValidationResult | null>(null);
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [err, setErr] = useState<string | null>(null);
+  const [subStatus, setSubStatus] = useState<Record<string, SubStatus>>({});
+  const [signingIn, setSigningIn] = useState(false);
+
+  const signIn = async () => {
+    setSigningIn(true);
+    try {
+      await settingsApi.subscriptionLogin(api, prov);
+      // the browser OAuth happens out-of-band; poll status until it flips logged-in
+      const start = Date.now();
+      while (Date.now() - start < 120000) {
+        await new Promise(res => window.setTimeout(res, 2500));
+        try {
+          const d = await (await settingsApi.subscriptionStatus(api)).json();
+          setSubStatus(d || {});
+          if (d?.[prov]?.logged_in) break;
+        } catch { /* keep polling */ }
+      }
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isSubscriptionProvider(prov)) return;
+    let alive = true;
+    settingsApi.subscriptionStatus(api).then(r => r.json()).then(d => { if (alive) setSubStatus(d || {}); }).catch(() => {});
+    return () => { alive = false; };
+  }, [prov, api]);
 
   useEffect(() => {
     if (!results && !err) return;
@@ -88,8 +116,11 @@ export function GlobalSettings({ cfg, set, onChange, prov, api }: { cfg: Cfg; se
             <SectionLabel label="Global Default" sub="fallback for any step not overridden" />
             <div style={{ padding: 16, borderRadius: 14, background: "var(--paper-2)", border: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 12 }}>
               <ProviderPills value={prov} onChange={v => onChange("llm_provider", v)} />
-              {prov !== "ollama" && (
+              {prov !== "ollama" && !isSubscriptionProvider(prov) && (
                 <ApiKeyInput value={cfg[KEY_FIELD[prov]] as string} onChange={v => onChange(KEY_FIELD[prov], v)} provider={prov} />
+              )}
+              {isSubscriptionProvider(prov) && (
+                <SubscriptionNote provider={prov} status={subStatus[prov]} onSignIn={signIn} busy={signingIn} />
               )}
               {prov === "ollama" && (
                 <input type="text" placeholder="http://localhost:11434/v1" value={cfg.ollama_url} onChange={set("ollama_url")} className="mono field-input"
@@ -107,7 +138,7 @@ export function GlobalSettings({ cfg, set, onChange, prov, api }: { cfg: Cfg; se
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Global Model</div>
-                    {prov !== "ollama" && (
+                    {prov !== "ollama" && !isSubscriptionProvider(prov) && (
                       <button className="btn ghost" onClick={loadModels} disabled={loadingModels} style={{ fontSize: 11, padding: "5px 9px" }}>
                         {loadingModels ? "Loading..." : "Load models"}
                       </button>

@@ -17,4 +17,6 @@ export const settingsApi = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   }),
+  subscriptionStatus: (api: ApiFetch) => api("/api/v1/settings/subscription-status"),
+  subscriptionLogin: (api: ApiFetch, provider: string) => api(`/api/v1/settings/subscription-login/${provider}`, { method: "POST" }),
 };

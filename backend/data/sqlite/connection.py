@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import weakref
 from pathlib import Path
 from typing import Any, cast
 
@@ -132,7 +133,20 @@ class ConnectionPool:
         connections[resolved] = conn
         with _POOL_LOCK:
             self._connections.add(conn)
+        # Reap this connection once its owning thread is gone, so a long-running
+        # process doesn't accumulate SQLite handles from dead worker threads.
+        # (check_same_thread=False makes the cross-thread close safe.)
+        weakref.finalize(threading.current_thread(), self._reap, conn)
         return conn
+
+    def _reap(self, conn) -> None:
+        with _POOL_LOCK:
+            self._connections.discard(conn)
+        try:
+            close_for_pool = getattr(conn, "close_for_pool", None)
+            (close_for_pool or conn.close)()
+        except Exception as exc:
+            _log.debug("sqlite pooled connection reap failed: %s", exc)
 
     def close_all(self) -> None:
         with _POOL_LOCK:
@@ -162,6 +176,30 @@ def close_all() -> None:
     _POOL.close_all()
 
 
+def prune_history(db_path: str | None = None, *, max_events: int = 5000, max_jobs: int = 500, max_errors: int = 1000) -> None:
+    """Cap the append-only telemetry tables to their most recent rows so a
+    long-lived local install doesn't accumulate events/jobs/errors forever.
+    Each delete is guarded so a not-yet-created table (e.g. gateway_jobs) is
+    simply skipped. Active jobs are never pruned."""
+    conn = get_connection(db_path)
+    prunes = [
+        ("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)", (max_events,)),
+        (
+            "DELETE FROM gateway_jobs WHERE status IN ('succeeded','failed','cancelled') "
+            "AND rowid NOT IN (SELECT rowid FROM gateway_jobs WHERE status IN ('succeeded','failed','cancelled') "
+            "ORDER BY created_at DESC LIMIT ?)",
+            (max_jobs,),
+        ),
+        ("DELETE FROM error_log WHERE rowid NOT IN (SELECT rowid FROM error_log ORDER BY last_seen DESC LIMIT ?)", (max_errors,)),
+    ]
+    for sql, params in prunes:
+        try:
+            conn.execute(sql, params)
+        except Exception as exc:
+            _log.debug("history prune skipped: %s", exc)
+    conn.commit()
+
+
 def _migration_files() -> list[Path]:
     return sorted(MIGRATIONS_DIR.glob("*.sql"))
 
@@ -182,7 +220,11 @@ def _apply_migration(conn, name: str, script: str) -> None:
         try:
             conn.execute(statement)
         except Exception as exc:
-            if "duplicate column name" not in str(exc).lower():
+            # Only the idempotent re-application of an ALTER ... ADD COLUMN may be
+            # safely skipped. Any other failure (incl. a duplicate-column error on
+            # a non-ADD-COLUMN statement) is a real migration bug and must surface,
+            # rather than being silently masked and the migration marked applied.
+            if not ("add column" in statement.lower() and "duplicate column name" in str(exc).lower()):
                 raise
             _log.debug("migration %s skipped duplicate column in: %s", name, statement)
 
@@ -241,9 +283,27 @@ def _run_migrations_inner(db_path: str | None = None) -> None:
             conn.execute("INSERT OR REPLACE INTO schema_migrations(name) VALUES(?)", (path.name,))
 
         _ensure_legacy_columns(conn)
+        _ensure_indexes(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_indexes(conn) -> None:
+    # Run after _ensure_legacy_columns so kind/feedback/followup_due_at exist.
+    # Indexes for the hot lead/event query paths — before this the only index in
+    # the schema was on resume_templates, so every filtered/ordered leads query
+    # and every per-lead events lookup was a full table scan. All IF NOT EXISTS.
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at);
+        CREATE INDEX IF NOT EXISTS idx_leads_status_kind ON leads(status, kind);
+        CREATE INDEX IF NOT EXISTS idx_leads_followup_due_at ON leads(followup_due_at);
+        CREATE INDEX IF NOT EXISTS idx_leads_feedback ON leads(feedback);
+        CREATE INDEX IF NOT EXISTS idx_events_job_id ON events(job_id);
+        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+        """
+    )
 
 
 def _ensure_core_tables(conn) -> None:

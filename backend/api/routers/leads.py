@@ -84,7 +84,8 @@ def create_router(manager) -> APIRouter:
         min_score: int | None = None,
         repo: Repository = Depends(get_repository),
     ):
-        jobs = [annotate_job_lead(lead) for lead in repo.leads.get_all_leads() if (lead.get("kind") or "job") == "job"]
+        all_leads = await asyncio.to_thread(repo.leads.get_all_leads)
+        jobs = [annotate_job_lead(lead) for lead in all_leads if (lead.get("kind") or "job") == "job"]
         requested = str(seniority or "").strip().lower()
         if beginner_only or requested == "beginner":
             jobs = [lead for lead in jobs if lead.get("seniority_level") in {"fresher", "junior"}]
@@ -104,7 +105,7 @@ def create_router(manager) -> APIRouter:
 
     @router.get("/leads/export.csv")
     async def export_leads_csv(repo: Repository = Depends(get_repository)):
-        rows = repo.leads.get_all_leads()
+        rows = await asyncio.to_thread(repo.leads.get_all_leads)
         fields = [
             "job_id",
             "title",
@@ -133,7 +134,7 @@ def create_router(manager) -> APIRouter:
     @router.get("/leads/{job_id}/versions")
     async def get_lead_versions(job_id: str, repo: Repository = Depends(get_repository)):
         job_id = _safe_job_id(job_id)
-        lead = repo.leads.get_lead_by_id(job_id)
+        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         paths = [
@@ -148,7 +149,7 @@ def create_router(manager) -> APIRouter:
     @router.get("/leads/{job_id}")
     async def get_lead(job_id: str, repo: Repository = Depends(get_repository)):
         job_id = _safe_job_id(job_id)
-        lead = repo.leads.get_lead_by_id(job_id)
+        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         return annotate_job_lead(lead) if (lead.get("kind") or "job") == "job" else lead
@@ -157,7 +158,7 @@ def create_router(manager) -> APIRouter:
     async def delete_lead_endpoint(job_id: str, repo: Repository = Depends(get_repository)):
         job_id = _safe_job_id(job_id)
         try:
-            repo.leads.delete_lead(job_id)
+            await asyncio.to_thread(repo.leads.delete_lead, job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="lead not found") from exc
         return {"ok": True}
@@ -166,7 +167,7 @@ def create_router(manager) -> APIRouter:
     async def update_status(job_id: str, body: StatusBody, repo: Repository = Depends(get_repository)):
         job_id = _safe_job_id(job_id)
         try:
-            repo.leads.update_lead_status(job_id, body.status)
+            await asyncio.to_thread(repo.leads.update_lead_status, job_id, body.status)
             await manager.broadcast({"type": "LEAD_UPDATED", "data": {"job_id": job_id, "status": body.status}})
             return {"ok": True}
         except LookupError as exc:
@@ -178,7 +179,7 @@ def create_router(manager) -> APIRouter:
     async def update_feedback(job_id: str, body: FeedbackBody, repo: Repository = Depends(get_repository)):
         job_id = _safe_job_id(job_id)
         try:
-            lead = repo.leads.save_lead_feedback(job_id, body.feedback, body.note)
+            lead = await asyncio.to_thread(repo.leads.save_lead_feedback, job_id, body.feedback, body.note)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not lead:
@@ -194,7 +195,7 @@ def create_router(manager) -> APIRouter:
         days = max(1, min(int(body.days or 5), 60))
         now = datetime.now(timezone.utc).isoformat()
         due = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-        lead = repo.leads.update_lead_followup(job_id, now, due)
+        lead = await asyncio.to_thread(repo.leads.update_lead_followup, job_id, now, due)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         await manager.broadcast({"type": "LEAD_UPDATED", "data": lead})
@@ -212,7 +213,7 @@ def create_router(manager) -> APIRouter:
         from gateway.lead_adapters import manual_lead_from_text
 
         raw_lead = manual_lead_from_text(body.text, body.url, "job")
-        examples = repo.feedback.get_feedback_training_examples()
+        examples = await asyncio.to_thread(repo.feedback.get_feedback_training_examples)
         try:
             lead = await asyncio.wait_for(
                 ranking_service.apply_feedback(raw_lead, examples),
@@ -226,8 +227,8 @@ def create_router(manager) -> APIRouter:
         if lead.get("kind") != "job":
             raise HTTPException(status_code=422, detail="Only job leads are accepted right now")
         lead = annotate_job_lead(lead)
-        repo.leads.save_lead(lead)
-        saved = repo.leads.get_lead_by_id(lead["job_id"]) or lead
+        await asyncio.to_thread(repo.leads.save_lead, lead)
+        saved = await asyncio.to_thread(repo.leads.get_lead_by_id, lead["job_id"]) or lead
         await manager.broadcast({"type": "LEAD_UPDATED", "data": saved})
         return saved
 
@@ -290,7 +291,7 @@ def create_router(manager) -> APIRouter:
     async def due_followups(limit: int = 25, repo: Repository = Depends(get_repository)):
         from datetime import datetime, timezone
 
-        return repo.leads.get_due_followups(limit, datetime.now(timezone.utc).isoformat())
+        return await asyncio.to_thread(repo.leads.get_due_followups, limit, datetime.now(timezone.utc).isoformat())
 
     @router.get("/leads/{job_id}/pdf")
     async def get_lead_pdf(
@@ -300,7 +301,7 @@ def create_router(manager) -> APIRouter:
         repo: Repository = Depends(get_repository),
     ):
         job_id = _safe_job_id(job_id)
-        lead = repo.leads.get_lead_by_id(job_id)
+        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         is_cover = kind in {"cover", "cover_letter", "cover-letter"}

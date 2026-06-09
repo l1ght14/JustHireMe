@@ -104,11 +104,14 @@ def parse_date(value: str) -> datetime | None:
 
 
 def is_recent(date_str: str) -> bool:
+    # Fail closed: an empty/unparseable date can't be confirmed recent, so for an
+    # auto-apply pipeline treat it as NOT recent. Callers that have a fresh-source
+    # hint (e.g. a past-week query) override this at the call site.
     if not date_str:
-        return True
+        return False
     parsed = parse_date(date_str)
     if parsed is None:
-        return True
+        return False
     return parsed >= cutoff()
 
 

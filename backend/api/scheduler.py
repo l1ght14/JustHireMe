@@ -19,7 +19,7 @@ from gateway.discovery_config import (
     profile_for_discovery,
 )
 from api.startup_validation import log_startup_warnings
-from data.sqlite.connection import close_all, init_sql
+from data.sqlite.connection import close_all, init_sql, prune_history
 
 
 def create_scheduler() -> AsyncIOScheduler:
@@ -174,14 +174,11 @@ def create_ghost_tick(manager):
     return ghost_tick
 
 
-def create_lifespan(scheduler: AsyncIOScheduler, ghost_tick, logger, service_supervisor=None):
+def create_lifespan(scheduler: AsyncIOScheduler, ghost_tick, logger):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_sql()
-        if service_supervisor is not None:
-            registry = await service_supervisor.start()
-            app.state.service_registry = registry
-            app.state.service_supervisor = service_supervisor
+        prune_history()  # cap the append-only telemetry tables on startup
         ensure_ghost_job(scheduler, ghost_tick)
         log_startup_warnings(get_repository(), logger)
         scheduler.start()
@@ -190,8 +187,6 @@ def create_lifespan(scheduler: AsyncIOScheduler, ghost_tick, logger, service_sup
             yield
         finally:
             scheduler.shutdown(wait=False)
-            if service_supervisor is not None:
-                await service_supervisor.stop()
             close_all()
         logger.info("FastAPI shutdown.")
 

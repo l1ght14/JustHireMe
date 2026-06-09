@@ -89,29 +89,39 @@ class JobStore:
 
     def update(self, job_id: str, *, status: str | None = None, progress: int | None = None, result: dict[str, Any] | None = None, error: str | None = None) -> None:
         self.init()
-        record = self.get(job_id)
-        if not record:
-            return
-        status = status or record.status
-        started_at = record.started_at or (_now() if status == "running" else "")
-        finished_at = record.finished_at or (_now() if status in {"succeeded", "failed", "cancelled"} else "")
+        # Atomic single-statement update of only the provided fields (COALESCE
+        # keeps the others). The previous read-modify-write across two
+        # connections was a lost-update race: two concurrent updates (e.g. the
+        # ghost cycle's progress ticks vs. a cancel request) could clobber each
+        # other, silently dropping a cancel. started_at/finished_at are stamped
+        # in-SQL on the first transition into running / a terminal state.
         conn = get_connection(self.db_path)
         try:
             conn.execute(
                 """
-                UPDATE gateway_jobs
-                SET status=?, progress=?, result_json=?, error=?, started_at=?, finished_at=?
-                WHERE job_id=?
+                UPDATE gateway_jobs SET
+                    status = COALESCE(:status, status),
+                    progress = COALESCE(:progress, progress),
+                    result_json = COALESCE(:result_json, result_json),
+                    error = COALESCE(:error, error),
+                    started_at = CASE
+                        WHEN started_at != '' THEN started_at
+                        WHEN COALESCE(:status, status) = 'running' THEN :now
+                        ELSE started_at END,
+                    finished_at = CASE
+                        WHEN finished_at != '' THEN finished_at
+                        WHEN COALESCE(:status, status) IN ('succeeded', 'failed', 'cancelled') THEN :now
+                        ELSE finished_at END
+                WHERE job_id = :job_id
                 """,
-                (
-                    status,
-                    record.progress if progress is None else progress,
-                    json.dumps(record.result_json if result is None else result),
-                    record.error if error is None else error,
-                    started_at,
-                    finished_at,
-                    job_id,
-                ),
+                {
+                    "status": status,
+                    "progress": progress,
+                    "result_json": json.dumps(result) if result is not None else None,
+                    "error": error,
+                    "now": _now(),
+                    "job_id": job_id,
+                },
             )
             conn.commit()
         finally:
