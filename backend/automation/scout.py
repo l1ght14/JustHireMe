@@ -12,6 +12,9 @@ from discovery.quality_gate import MIN_DEFAULT_QUALITY, attach_quality_metadata,
 from discovery.sources import apify as apify_sources
 from discovery.sources import ats as ats_sources
 from discovery.sources import hackernews as hn_sources
+from discovery.sources import glassdoor as glassdoor_sources
+from discovery.sources import indeed as indeed_sources
+from discovery.sources import naukri as naukri_sources
 from discovery.sources import rss as rss_sources
 from discovery.sources import web as web_sources
 from data.repository import create_repository
@@ -47,6 +50,9 @@ _SOURCE_CAPS = {
     "jobicy": 45,
     "weworkremotely": 40,
     "rss": 35,
+    "indeed": 40,
+    "naukri": 40,
+    "glassdoor": 45,
 }
 
 _FRESHER_TERMS = (
@@ -519,6 +525,7 @@ def run(
     apify_actor: str | None = None,
     headed: bool = False,
     min_quality: int = MIN_DEFAULT_QUALITY,
+    linkedin_cookie: str | None = None,
 ) -> list:
     errors: list[str] = []
     leads = []
@@ -552,6 +559,12 @@ def run(
                 processed_leads.extend(asyncio.run(_scrape_remoteok()))
             elif "jobicy.com/api" in target:
                 processed_leads.extend(asyncio.run(_scrape_jobicy_api(target)))
+            elif indeed_sources.is_indeed_target(target):
+                processed_leads.extend(indeed_sources.scrape_indeed_target(target, headed=headed))
+            elif naukri_sources.is_naukri_target(target):
+                processed_leads.extend(naukri_sources.scrape_naukri_target(target, headed=headed))
+            elif glassdoor_sources.is_glassdoor_target(target):
+                processed_leads.extend(glassdoor_sources.scrape_glassdoor_target(target, headed=headed))
             elif _is_rss_target(target):
                 processed_leads.extend(asyncio.run(_scrape_rss(target)))
             elif target.startswith("site:"):
@@ -571,15 +584,23 @@ def run(
             errors.append(f"{target}: {_source_error_detail(_e)}")
             _log.warning("Skipping %s: %s", target, _e)
 
-    # Apify fallback
+    # Apify fallback — fires when token + actor + queries are all present.
+    # The actor input includes linkedin_cookie when available, letting users
+    # point this at a LinkedIn Jobs Scraper actor on Apify marketplace.
     if apify_token and apify_actor and queries:
-        raw = asyncio.run(apify(apify_actor, {"queries": queries}, apify_token))
+        actor_input: dict = {"queries": queries}
+        if linkedin_cookie:
+            actor_input["linkedInCookie"] = linkedin_cookie
+            actor_input["cookie"] = linkedin_cookie  # some actors use this key
+        raw = asyncio.run(apify(apify_actor, actor_input, apify_token))
         for item in raw:
             processed_leads.append({
                 "title": item.get("title", ""),
-                "company": item.get("company", ""),
-                "url": item.get("url", ""),
-                "platform": "apify"
+                "company": item.get("company", "") or item.get("companyName", ""),
+                "url": item.get("url", "") or item.get("jobUrl", ""),
+                "platform": "apify",
+                "description": item.get("description", "") or item.get("descriptionHtml", ""),
+                "posted_date": item.get("postedAt", "") or item.get("posted_date", ""),
             })
 
     # Save and Deduplicate

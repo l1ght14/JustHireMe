@@ -38,10 +38,17 @@ async def run_actor(actor: str, inp: dict, token: str) -> list:
 def run_board_scan(urls: list[str], cfg: dict) -> BoardScanResult:
     from automation.source_adapters import run_apify_scout
 
+    # Extract search queries from the user's configured target roles so the
+    # Apify actor (LinkedIn, Indeed, etc.) knows what to search for.
+    raw_roles: str = cfg.get("desired_position") or cfg.get("onboarding_target_role") or ""
+    queries: list[str] = [q.strip() for q in raw_roles.splitlines() if q.strip()]
+
     result = run_apify_scout(
         urls=urls,
         apify_token=cfg.get("apify_token") or None,
         apify_actor=cfg.get("apify_actor") or None,
+        queries=queries or None,
+        linkedin_cookie=cfg.get("linkedin_cookie") or None,
     )
     return BoardScanResult(
         leads=result.leads,

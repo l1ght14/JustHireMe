@@ -21,13 +21,22 @@ def run_free_scout(**kwargs) -> SourceAdapterResult:
     )
 
 
-def run_apify_scout(*, urls: list[str], apify_token: str | None = None, apify_actor: str | None = None) -> SourceAdapterResult:
+def run_apify_scout(
+    *,
+    urls: list[str],
+    apify_token: str | None = None,
+    apify_actor: str | None = None,
+    queries: list[str] | None = None,
+    linkedin_cookie: str | None = None,
+) -> SourceAdapterResult:
     from automation import scout
 
     leads = scout.run(
         urls=urls,
         apify_token=apify_token,
         apify_actor=apify_actor,
+        queries=queries,
+        linkedin_cookie=linkedin_cookie,
     )
     return SourceAdapterResult(
         leads=leads,

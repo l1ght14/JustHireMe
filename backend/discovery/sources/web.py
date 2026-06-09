@@ -56,6 +56,10 @@ def ensure_scheme(u: str) -> str:
         or lower.startswith("github:")
         or lower.startswith("hn:")
         or lower.startswith("reddit:")
+        or lower.startswith("indeed:")
+        or lower.startswith("indeed-in:")
+        or lower.startswith("naukri:")
+        or lower.startswith("glassdoor:")
         or lower.startswith("http://")
         or lower.startswith("https://")
     ):
