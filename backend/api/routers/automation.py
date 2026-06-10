@@ -72,8 +72,17 @@ async def actuate_job(job_id: str, manager, repo: Repository | None = None, serv
     job = job_store.create("automation_fire", {"job_id": job_id})
     try:
         job_store.update(job.job_id, status="running", progress=10)
-        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
-        asset = (lead or {}).get("resume_asset") or (lead or {}).get("asset") or ""
+
+        # Use get_lead_for_fire() so the enriched candidate dict (email, phone,
+        # cover letter text, LinkedIn etc. extracted from the resume PDF) is
+        # passed to the form filler — not just the raw DB record.
+        try:
+            lead, asset = await service.get_lead_for_fire(job_id)
+        except Exception as exc:
+            _log.warning("get_lead_for_fire failed for %s: %s — falling back to raw DB read", job_id, exc)
+            lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
+            asset = (lead or {}).get("resume_asset") or (lead or {}).get("asset") or ""
+
         _status, detail = fire_blocker(lead, asset)
         if detail:
             await manager.broadcast({
@@ -198,11 +207,23 @@ def create_router(manager) -> APIRouter:
         repo: Repository = Depends(get_repository),
         service=Depends(get_automation_service),
     ):
-        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
-        asset = (lead or {}).get("resume_asset") or (lead or {}).get("asset") or ""
+        # Use enriched lead so email/phone/cover letter are available for filling.
+        # Force headed=True so the user sees the browser being filled and can
+        # review and submit manually — this is the semi-auto path.
+        try:
+            lead, asset = await service.get_lead_for_fire(job_id)
+        except Exception as exc:
+            _log.warning("get_lead_for_fire failed for %s: %s — falling back", job_id, exc)
+            lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
+            asset = (lead or {}).get("resume_asset") or (lead or {}).get("asset") or ""
+
         status_code, detail = fire_blocker(lead, asset)
         if detail:
             raise HTTPException(status_code=status_code, detail=detail)
+
+        # Force headed mode for preview: user watches the form being filled
+        # and then clicks Submit themselves.
+        lead = {**lead, "_force_headed": True}
         return await service.preview_application(lead, asset)
 
     return router

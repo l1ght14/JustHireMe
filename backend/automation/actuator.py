@@ -164,7 +164,114 @@ _DOM_MAP = [
     ("textarea[name*='message']",  "cover_letter"),
 ]
 
+# Select (dropdown) mappings: selector → (candidate_key, preferred_option_keywords)
+# The filler picks the first <option> whose text contains any of the keywords.
+_SELECT_MAP = [
+    # Work authorization — look for "yes" / "authorized" options
+    ("select[name*='authorized']",      "work_auth",  ("yes", "authorized", "eligible")),
+    ("select[name*='authorization']",   "work_auth",  ("yes", "authorized", "eligible")),
+    ("select[name*='work_auth']",       "work_auth",  ("yes", "authorized", "eligible")),
+    ("select[name*='legally']",         "work_auth",  ("yes", "authorized", "eligible")),
+    # Sponsorship — look for "no" options (most candidates don't need sponsorship declared as yes)
+    ("select[name*='sponsor']",         "sponsorship", ("no", "not require", "don't require")),
+    ("select[name*='visa']",            "sponsorship", ("no", "not require", "don't require")),
+    # Employment type
+    ("select[name*='employment_type']", "job_type",    ("full", "full-time")),
+    ("select[name*='job_type']",        "job_type",    ("full", "full-time")),
+    # Salary / pay — leave blank if value not provided (don't guess)
+    ("select[name*='currency']",        "currency",    ("inr", "usd", "gbp")),
+]
+
+# Radio button mappings: label-text fragment → value to select
+# Matches the <label> associated with a radio input by visible text.
+_RADIO_MAP = [
+    # "Are you legally authorized to work?" → Yes
+    (("authorized", "legally", "eligible"),       "yes"),
+    # "Do you require visa sponsorship?" → No
+    (("sponsor", "visa", "sponsorship"),           "no"),
+    # "Are you willing to relocate?" → Yes (conservative)
+    (("relocat",),                                  "yes"),
+]
+
 _FILL_DELAY = 500
+
+
+async def _fill_select(p, sel: str, keywords: tuple[str, ...]) -> bool:
+    """Pick the first <option> whose text contains any keyword (case-insensitive)."""
+    try:
+        el = p.locator(sel).first
+        await el.wait_for(state="visible", timeout=2000)
+        options = await el.locator("option").all_text_contents()
+        for opt in options:
+            lower = opt.lower()
+            if any(kw in lower for kw in keywords):
+                await el.select_option(label=opt, timeout=3000)
+                await p.wait_for_timeout(_FILL_DELAY)
+                return True
+    except Exception as exc:
+        _log.debug("select fill skipped (%s): %s", sel, exc)
+    return False
+
+
+async def _fill_radio(p, label_fragments: tuple[str, ...], value: str) -> bool:
+    """
+    Find a radio group whose surrounding label text matches any fragment,
+    then pick the radio whose own label contains `value`.
+    """
+    try:
+        for radio in await p.locator("input[type='radio']").all():
+            try:
+                label_el = p.locator(f"label[for='{await radio.get_attribute('id')}']")
+                group_text = (await label_el.inner_text(timeout=500)).lower()
+                if not any(frag in group_text for frag in label_fragments):
+                    # Also check the parent container text
+                    parent_text = (await radio.evaluate(
+                        "el => el.closest('fieldset,div,section')?.innerText || ''",
+                        timeout=500
+                    )).lower()
+                    if not any(frag in parent_text for frag in label_fragments):
+                        continue
+                # Found the group — now pick the right value
+                option_label = p.locator(
+                    f"label[for='{await radio.get_attribute('id')}']"
+                )
+                opt_text = (await option_label.inner_text(timeout=500)).lower()
+                if value in opt_text:
+                    await radio.check(timeout=2000)
+                    await p.wait_for_timeout(_FILL_DELAY)
+                    return True
+            except Exception:
+                continue
+    except Exception as exc:
+        _log.debug("radio fill error: %s", exc)
+    return False
+
+
+async def _check_terms_checkbox(p) -> bool:
+    """Auto-check any 'I agree to terms / privacy policy' checkbox."""
+    try:
+        for cb in await p.locator("input[type='checkbox']").all():
+            try:
+                cb_id = await cb.get_attribute("id") or ""
+                label_text = ""
+                if cb_id:
+                    lbl = p.locator(f"label[for='{cb_id}']")
+                    label_text = (await lbl.inner_text(timeout=300)).lower()
+                if not label_text:
+                    label_text = (await cb.evaluate(
+                        "el => el.closest('label,div')?.innerText || ''",
+                        timeout=300
+                    )).lower()
+                if any(kw in label_text for kw in ("agree", "terms", "privacy", "consent", "accept")):
+                    if not await cb.is_checked():
+                        await cb.check(timeout=2000)
+                        await p.wait_for_timeout(_FILL_DELAY)
+                    return True
+            except Exception:
+                continue
+    except Exception as exc:
+        _log.debug("checkbox fill error: %s", exc)
+    return False
 
 
 async def _upload_resume(p, asset: str) -> bool:
@@ -182,6 +289,8 @@ async def _upload_resume(p, asset: str) -> bool:
 
 async def _fill_dom(p, j: dict, a: str):
     result: dict[str, Any] = {"fields": [], "uploaded": False, "vision_actions": 0}
+
+    # --- Text / textarea inputs ---
     for sel, key in _DOM_MAP:
         v = j.get(key, "")
         if not v:
@@ -196,7 +305,22 @@ async def _fill_dom(p, j: dict, a: str):
             await p.wait_for_timeout(_FILL_DELAY)
         except Exception as log_exc:
             logging.getLogger(__name__).warning('suppressed exception in backend/automation/actuator.py:_fill_dom: %s', log_exc)
-            pass
+
+    # --- Select (dropdown) inputs ---
+    for sel, _key, keywords in _SELECT_MAP:
+        if await _fill_select(p, sel, keywords):
+            result["fields"].append(f"select:{_key}")
+
+    # --- Radio buttons (work auth, sponsorship, relocation) ---
+    for label_fragments, value in _RADIO_MAP:
+        if await _fill_radio(p, label_fragments, value):
+            result["fields"].append(f"radio:{label_fragments[0]}")
+
+    # --- Terms/privacy checkboxes ---
+    if await _check_terms_checkbox(p):
+        result["fields"].append("checkbox:terms")
+
+    # --- Resume file upload ---
     result["uploaded"] = await _upload_resume(p, a)
     return result
 
@@ -436,7 +560,10 @@ async def _run(job: dict, asset: str, dry_run: bool = False) -> bool | dict:
     from playwright.async_api import async_playwright
     async with async_playwright() as pw:
         from data.repository import create_repository
-        _headed = create_repository().settings.get_setting("headed_browser", "false").lower() == "true"
+        settings_headed = create_repository().settings.get_setting("headed_browser", "false").lower() == "true"
+        # _force_headed=True means the caller (preview path) wants a visible
+        # browser so the user can review the filled form and submit manually.
+        _headed = settings_headed or bool(job.get("_force_headed"))
         ok = False
         b = None
         ctx = None
