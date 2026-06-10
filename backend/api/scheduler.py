@@ -28,21 +28,43 @@ def create_scheduler() -> AsyncIOScheduler:
 
 def ensure_ghost_job(scheduler: AsyncIOScheduler, ghost_tick) -> None:
     if not scheduler.get_job("ghost"):
-        scheduler.add_job(ghost_tick, "interval", hours=6, id="ghost")
+        # Tick every hour — the ghost_tick function itself checks whether
+        # enough time has passed based on the user's scan_interval_hours setting.
+        # This lets the interval be changed without restarting the app.
+        scheduler.add_job(ghost_tick, "interval", hours=1, id="ghost")
 
 
 def create_ghost_tick(manager):
+    # Track the last time the ghost scan actually ran so we can respect
+    # the user-configured scan_interval_hours without restarting the app.
+    _state: dict = {"last_run_ts": 0.0}
+
     async def ghost_tick():
+        import time
         repo = get_repository()
+        cfg = repo.settings.get_settings()
+
+        if repo.settings.get_setting("ghost_mode") != "true":
+            return
+
+        # Respect the user-configured interval (default 24 h).
+        try:
+            interval_hours = max(1, int(cfg.get("scan_interval_hours") or "24"))
+        except (ValueError, TypeError):
+            interval_hours = 24
+        interval_seconds = interval_hours * 3600
+        now = time.time()
+        if now - _state["last_run_ts"] < interval_seconds:
+            return  # not time yet — check again next tick
+        _state["last_run_ts"] = now
+
+        # Instantiate services only when the scan is actually going to run
         automation_service = get_automation_service()
         discovery_service = get_discovery_service()
         ranking_service = get_ranking_service()
         generation_service = get_generation_service()
         job_store = get_job_runner()
 
-        cfg = repo.settings.get_settings()
-        if repo.settings.get_setting("ghost_mode") != "true":
-            return
         ghost_job = job_store.create("ghost_cycle", {})
         job_store.update(ghost_job.job_id, status="running", progress=5)
 

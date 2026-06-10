@@ -28,6 +28,7 @@ export interface Cfg {
   custom_connectors_enabled: string; custom_connectors: string; custom_connector_headers: string;
   desired_position: string; onboarding_target_role: string; job_boards: string; job_market_focus: string;
   ghost_mode: string; auto_apply: string; headed_browser: string;
+  scan_interval_hours: string;
 }
 
 export const EMPTY: Cfg = {
@@ -57,6 +58,7 @@ export const EMPTY: Cfg = {
   custom_connectors_enabled: "false", custom_connectors: "", custom_connector_headers: "",
   desired_position: "", onboarding_target_role: "", job_boards: "", job_market_focus: "global",
   ghost_mode: "false", auto_apply: "false", headed_browser: "false",
+  scan_interval_hours: "24",
 };
 
 export const PROVIDERS = [
