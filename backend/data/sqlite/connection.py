@@ -59,6 +59,7 @@ _LEGACY_LEAD_COLUMNS = [
     ("learning_delta", "INTEGER DEFAULT 0"),
     ("learning_reason", "TEXT DEFAULT ''"),
     ("resume_version", "INTEGER DEFAULT 0"),
+    ("applied_at", "TEXT DEFAULT ''"),
 ]
 
 

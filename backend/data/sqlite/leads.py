@@ -589,12 +589,45 @@ def update_outreach_fields(job_id: str, fields: dict[str, str], db_path: str = D
 def mark_applied(job_id: str, db_path: str = DEFAULT_DB_PATH) -> None:
     conn = get_connection(db_path)
     try:
-        conn.execute("UPDATE leads SET status='applied' WHERE job_id=?", (job_id,))
+        conn.execute(
+            "UPDATE leads SET status='applied', applied_at=datetime('now') WHERE job_id=?",
+            (job_id,),
+        )
         conn.execute(
             "INSERT INTO events(job_id,action) VALUES(?,?)",
             (job_id, "submitted application"),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_followup_due_leads(
+    days: int = 7,
+    db_path: str = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Return applied leads where applied_at was exactly `days` days ago (±12 h window).
+
+    Used by the follow-up reminder scheduler to notify the user when it is
+    time to follow up on an application.
+    """
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT job_id, title, company, url, applied_at
+            FROM   leads
+            WHERE  status = 'applied'
+              AND  applied_at != ''
+              AND  applied_at IS NOT NULL
+              AND  datetime(applied_at, '+' || ? || ' days', '-12 hours')
+                   <= datetime('now')
+              AND  datetime('now')
+                   <= datetime(applied_at, '+' || ? || ' days', '+12 hours')
+            """,
+            (days, days),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

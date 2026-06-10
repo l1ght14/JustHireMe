@@ -196,12 +196,69 @@ def create_ghost_tick(manager):
     return ghost_tick
 
 
-def create_lifespan(scheduler: AsyncIOScheduler, ghost_tick, logger):
+def create_followup_tick(manager):
+    """
+    Returns a coroutine that runs every hour and checks for applied jobs
+    that are due for a follow-up (default: 7 days after applying).
+
+    When due leads are found it broadcasts a FOLLOWUP_REMINDER WebSocket
+    event for each one. The frontend intercepts this event and fires an
+    OS desktop notification via Tauri's notification plugin.
+    """
+    async def followup_tick():
+        from data.sqlite.leads import get_followup_due_leads
+
+        repo = get_repository()
+        try:
+            followup_days = int(repo.settings.get_setting("followup_days", "7") or "7")
+        except (ValueError, TypeError):
+            followup_days = 7
+
+        try:
+            due = await asyncio.to_thread(get_followup_due_leads, followup_days)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "followup_tick: get_followup_due_leads failed: %s", exc
+            )
+            return
+
+        for lead in due:
+            title   = lead.get("title", "Unknown Role")
+            company = lead.get("company", "Unknown Company")
+            job_id  = lead.get("job_id", "")
+            await manager.broadcast({
+                "type":              "FOLLOWUP_REMINDER",
+                "job_id":            job_id,
+                "title":             title,
+                "company":           company,
+                "days":              followup_days,
+                "msg": (
+                    f"Follow up on {title} @ {company} — "
+                    f"it's been {followup_days} days since you applied."
+                ),
+            })
+            logging.getLogger(__name__).info(
+                "followup reminder sent for %s @ %s (job_id=%s)", title, company, job_id
+            )
+
+    return followup_tick
+
+
+def ensure_followup_job(scheduler: AsyncIOScheduler, followup_tick) -> None:
+    if not scheduler.get_job("followup"):
+        # Check every hour — the query only returns leads that are exactly
+        # N days old (±12 h), so hourly checks won't spam the user.
+        scheduler.add_job(followup_tick, "interval", hours=1, id="followup")
+
+
+def create_lifespan(scheduler: AsyncIOScheduler, ghost_tick, logger, followup_tick=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_sql()
         prune_history()  # cap the append-only telemetry tables on startup
         ensure_ghost_job(scheduler, ghost_tick)
+        if followup_tick is not None:
+            ensure_followup_job(scheduler, followup_tick)
         log_startup_warnings(get_repository(), logger)
         scheduler.start()
         logger.info("FastAPI live.")

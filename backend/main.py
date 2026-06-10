@@ -12,7 +12,7 @@ from fastapi import WebSocket
 
 from api.app import create_app
 from api.auth import create_api_token, require_ws_token
-from api.scheduler import create_ghost_tick, create_lifespan, create_scheduler
+from api.scheduler import create_ghost_tick, create_followup_tick, create_lifespan, create_scheduler
 from api.websocket import ConnectionManager, agent_event_action as _agent_event_action  # noqa: F401
 from core.logging import get_logger
 
@@ -46,8 +46,9 @@ async def _require_ws_token(ws: WebSocket) -> bool:
 
 
 def build_gateway_app():
-    ghost_tick = create_ghost_tick(cm)
-    lifespan = create_lifespan(_sched, ghost_tick, _log)
+    ghost_tick    = create_ghost_tick(cm)
+    followup_tick = create_followup_tick(cm)
+    lifespan = create_lifespan(_sched, ghost_tick, _log, followup_tick=followup_tick)
     return create_app(
         lifespan=lifespan,
         token_getter=lambda: _API_TOKEN,
