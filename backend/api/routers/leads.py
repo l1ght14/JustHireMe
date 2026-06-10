@@ -328,4 +328,210 @@ def create_router(manager) -> APIRouter:
             raise HTTPException(status_code=404, detail=missing)
         return FileResponse(path, media_type="application/pdf", filename=filename)
 
+    # ------------------------------------------------------------------ #
+    # Feature: Skills gap analysis                                         #
+    # ------------------------------------------------------------------ #
+    @router.get("/leads/gap-analysis")
+    async def gap_analysis(
+        min_score: int = 50,
+        repo: Repository = Depends(get_repository),
+    ):
+        """
+        Aggregate the `gaps` field across all scored, non-discarded leads
+        and return the most common gaps. Helps the user understand which
+        skills to add to their profile to increase match rates.
+        """
+        leads = await asyncio.to_thread(repo.leads.get_all_leads)
+        candidates = [
+            l for l in leads
+            if l.get("status") != "discarded" and (l.get("score") or 0) >= min_score
+        ]
+
+        from collections import Counter
+        import re as _re
+
+        gap_counter: Counter = Counter()
+        skill_counter: Counter = Counter()
+
+        # Known skill-like tokens to extract from gap text
+        _SKILL_RE = _re.compile(
+            r"\b(TypeScript|JavaScript|Python|Java|Go|Rust|C\+\+|React|Vue|Angular|"
+            r"Node\.?js|FastAPI|Django|Flask|Spring|Docker|Kubernetes|AWS|GCP|Azure|"
+            r"PostgreSQL|MySQL|MongoDB|Redis|Kafka|GraphQL|REST|CI/CD|DevOps|"
+            r"Machine Learning|ML|AI|LLM|TensorFlow|PyTorch|Pandas|Numpy|SQL|"
+            r"Git|Linux|Terraform|Ansible|Jenkins|GitHub Actions)\b",
+            _re.I,
+        )
+
+        for lead in candidates:
+            for gap in (lead.get("gaps") or []):
+                gap_text = str(gap).strip()
+                if not gap_text:
+                    continue
+                # Normalise gap text: lowercase, strip trailing punctuation
+                key = gap_text.rstrip(".!?").lower()
+                gap_counter[key] += 1
+                # Extract skill mentions from the gap text
+                for match in _SKILL_RE.findall(gap_text):
+                    skill_counter[match.lower()] += 1
+
+        total = len(candidates)
+        top_gaps = [
+            {"gap": gap, "count": cnt, "pct": round(cnt / total * 100) if total else 0}
+            for gap, cnt in gap_counter.most_common(15)
+        ]
+        top_skills = [
+            {"skill": skill, "count": cnt}
+            for skill, cnt in skill_counter.most_common(10)
+        ]
+
+        return {
+            "total_leads_analyzed": total,
+            "min_score_filter": min_score,
+            "top_gaps": top_gaps,
+            "skills_to_add": top_skills,
+            "summary": (
+                f"Analysed {total} leads scoring {min_score}+. "
+                f"Most common gap: '{top_gaps[0]['gap']}' ({top_gaps[0]['pct']}% of leads)"
+                if top_gaps else f"No gaps found in {total} scored leads."
+            ),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Feature: Interview prep generator                                    #
+    # ------------------------------------------------------------------ #
+    @router.post("/leads/{job_id}/interview-prep")
+    async def generate_interview_prep(
+        job_id: str,
+        repo: Repository = Depends(get_repository),
+    ):
+        """
+        Generate 10 likely interview questions + suggested answers based on
+        the job description, the candidate profile, and the lead's gap analysis.
+        Result is saved to the lead and returned.
+        """
+        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        profile = await asyncio.to_thread(repo.profile.get_profile)
+        settings = await asyncio.to_thread(repo.settings.get_settings)
+
+        from llm import call_raw
+
+        gaps_text    = "\n".join(f"- {g}" for g in (lead.get("gaps") or []))
+        matches_text = "\n".join(f"- {m}" for m in (lead.get("match_points") or []))
+        skills       = ", ".join(s.get("n", "") for s in (profile.get("skills") or []))
+        exp_text     = "\n".join(
+            f"- {e.get('role','')} at {e.get('co','')} ({e.get('period','')})"
+            for e in (profile.get("exp") or [])
+        )
+
+        system = (
+            "You are a senior engineering interview coach. Generate exactly 10 interview "
+            "questions for this candidate + role, with a concise suggested answer for each. "
+            "Base questions on the job requirements, the candidate's actual strengths, "
+            "and especially their identified gaps — interviewers probe gaps most. "
+            "Format each as:\nQ: [question]\nA: [2-3 sentence answer using the candidate's real evidence]\n"
+            "Questions should mix: 2 behavioural, 3 technical, 2 project deep-dives, "
+            "1 gap-addressing, 1 culture fit, 1 closing question. "
+            "Answers must reference the candidate's actual profile — never invent facts."
+        )
+        user = (
+            f"ROLE: {lead.get('title','')} at {lead.get('company','')}\n"
+            f"JOB DESCRIPTION:\n{(lead.get('description',''))[:2000]}\n\n"
+            f"CANDIDATE STRENGTHS:\n{matches_text or 'None listed'}\n\n"
+            f"CANDIDATE GAPS (probe these):\n{gaps_text or 'None listed'}\n\n"
+            f"CANDIDATE SKILLS: {skills}\n\n"
+            f"WORK EXPERIENCE:\n{exp_text or 'No experience listed'}\n\n"
+            "Generate 10 interview questions and answers:"
+        )
+
+        try:
+            result = await asyncio.to_thread(call_raw, system, user, step="generator")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"LLM call failed: {exc}")
+
+        # Save to lead's interview_prep field
+        try:
+            conn = repo.leads._get_connection() if hasattr(repo.leads, "_get_connection") else None
+            if conn is None:
+                from data.sqlite.connection import get_connection
+                conn = get_connection()
+            conn.execute(
+                "UPDATE leads SET interview_prep=? WHERE job_id=?",
+                (result, job_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # Don't fail the response if save fails
+
+        return {"job_id": job_id, "interview_prep": result}
+
+    @router.get("/leads/{job_id}/interview-prep")
+    async def get_interview_prep(
+        job_id: str,
+        repo: Repository = Depends(get_repository),
+    ):
+        """Return previously generated interview prep for a lead."""
+        lead = await asyncio.to_thread(repo.leads.get_lead_by_id, job_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        prep = lead.get("interview_prep", "")
+        return {"job_id": job_id, "interview_prep": prep, "generated": bool(prep)}
+
+    # ------------------------------------------------------------------ #
+    # Feature: Source performance dashboard                                #
+    # ------------------------------------------------------------------ #
+    @router.get("/leads/source-stats")
+    async def source_stats(repo: Repository = Depends(get_repository)):
+        """
+        Aggregate leads by their source platform and return per-source
+        performance metrics: total found, avg score, applied count.
+        Helps the user see which job sources are yielding the best results.
+        """
+        leads = await asyncio.to_thread(repo.leads.get_all_leads)
+        non_discarded = [l for l in leads if l.get("status") != "discarded"]
+
+        from collections import defaultdict
+        buckets: dict = defaultdict(lambda: {
+            "total": 0, "scored": 0, "score_sum": 0,
+            "applied": 0, "approved": 0, "high_quality": 0,
+        })
+
+        for lead in non_discarded:
+            src = (lead.get("platform") or "unknown").lower().strip() or "unknown"
+            b = buckets[src]
+            b["total"] += 1
+            score = lead.get("score") or 0
+            if score > 0:
+                b["scored"] += 1
+                b["score_sum"] += score
+            if lead.get("status") == "applied":
+                b["applied"] += 1
+            if lead.get("status") in ("approved", "interviewing", "accepted"):
+                b["approved"] += 1
+            if score >= 75:
+                b["high_quality"] += 1
+
+        by_source = []
+        for src, b in sorted(buckets.items(), key=lambda x: x[1]["total"], reverse=True):
+            avg_score = round(b["score_sum"] / b["scored"]) if b["scored"] > 0 else 0
+            by_source.append({
+                "source":       src,
+                "total":        b["total"],
+                "scored":       b["scored"],
+                "avg_score":    avg_score,
+                "high_quality": b["high_quality"],
+                "applied":      b["applied"],
+                "approved":     b["approved"],
+            })
+
+        return {
+            "total_leads":  len(non_discarded),
+            "by_source":    by_source,
+            "best_source":  by_source[0]["source"] if by_source else None,
+        }
+
     return router

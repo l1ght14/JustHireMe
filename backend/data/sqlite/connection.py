@@ -60,6 +60,7 @@ _LEGACY_LEAD_COLUMNS = [
     ("learning_reason", "TEXT DEFAULT ''"),
     ("resume_version", "INTEGER DEFAULT 0"),
     ("applied_at", "TEXT DEFAULT ''"),
+    ("interview_prep", "TEXT DEFAULT ''"),
 ]
 
 

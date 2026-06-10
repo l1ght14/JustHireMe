@@ -128,6 +128,82 @@ async def delete_achievement_endpoint(entry: str, service=Depends(get_profile_se
     return {"ok": True}
 
 
+@router.delete("/profile/achievement/{entry:path}")
+async def delete_achievement_endpoint(entry: str, service=Depends(get_profile_service)):
+    await _call_service(service.delete_achievement, entry)
+    return {"ok": True}
+
+
+@router.get("/profile/completeness")
+async def profile_completeness_endpoint(service=Depends(get_profile_service)):
+    """
+    Returns a completeness score (0-100) and a prioritised list of missing
+    profile fields. Higher completeness → better fit scoring accuracy.
+    """
+    profile = await _call_service(service.get_profile)
+    return _compute_completeness(profile or {})
+
+
+def _compute_completeness(p: dict) -> dict:
+    checks: list[dict] = []
+    score = 0
+
+    def check(key: str, label: str, points: int, ok: bool, tip: str) -> None:
+        nonlocal score
+        if ok:
+            score += points
+        checks.append({"key": key, "label": label, "points": points, "ok": ok, "tip": tip})
+
+    name     = str(p.get("n") or "").strip()
+    summary  = str(p.get("s") or "").strip()
+    skills   = p.get("skills") or []
+    exp      = p.get("exp") or []
+    projects = p.get("projects") or []
+    edu      = p.get("education") or []
+    identity = p.get("identity") or {}
+    email    = str(identity.get("email") or "").strip()
+    linkedin = str(identity.get("linkedin_url") or "").strip()
+    github   = str(identity.get("github_url") or "").strip()
+    city     = str(identity.get("city") or "").strip()
+
+    check("name",      "Full name",              10, bool(name),
+          "Add your name in Profile → Identity so it appears on generated resumes.")
+    check("summary",   "Professional summary",   10, bool(summary),
+          "Write a 2-3 sentence summary in Profile → Identity. This is the first thing the AI uses to score fit.")
+    check("email",     "Email address",           8, bool(email),
+          "Add your email in Profile → Contact & Links — required for generated documents and contact lookup.")
+    check("skills_3",  "At least 3 skills",      15, len(skills) >= 3,
+          f"You have {len(skills)} skill(s). Add more in Profile → Skills — skills drive keyword matching.")
+    check("experience","Work experience",         15, len(exp) >= 1,
+          "Add at least one job in Profile → Experience. Without it, senior roles will score low against you.")
+    check("project",   "At least 1 project",     12, len(projects) >= 1,
+          "Add a project in Profile → Projects with its tech stack. Projects are strong evidence for fit scoring.")
+    check("linkedin",  "LinkedIn URL",             8, bool(linkedin),
+          "Add your LinkedIn URL in Profile → Contact & Links. Used for contact lookup and outreach.")
+    check("github",    "GitHub URL",               7, bool(github),
+          "Add your GitHub URL to let the app analyse your repositories for additional skill evidence.")
+    check("city",      "City / location",          5, bool(city),
+          "Add your city in Profile → Contact & Links for location-aware job matching.")
+    check("education", "Education",                5, len(edu) >= 1,
+          "Add your degree/institution in Profile → Education.")
+    check("skills_5",  "5+ skills (bonus)",        5, len(skills) >= 5,
+          f"You have {len(skills)} skill(s). Aim for 8-12 skills covering your main technologies.")
+
+    missing = [c for c in checks if not c["ok"]]
+    # Sort missing: highest-points first
+    missing.sort(key=lambda c: c["points"], reverse=True)
+
+    return {
+        "score":       score,
+        "max_score":   100,
+        "pct":         score,
+        "status":      "excellent" if score >= 85 else "good" if score >= 65 else "needs_work",
+        "checks":      checks,
+        "missing":     missing,
+        "top_action":  missing[0]["tip"] if missing else None,
+    }
+
+
 async def _call_service(method, *args, **kwargs):
     if inspect.iscoroutinefunction(method):
         return await method(*args, **kwargs)

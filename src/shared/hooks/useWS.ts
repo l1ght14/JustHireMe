@@ -175,6 +175,18 @@ export function useWS() {
             window.dispatchEvent(new CustomEvent("leads-refresh"));
           }
           if (d.event === "auto_discard_done") window.dispatchEvent(new CustomEvent("leads-refresh"));
+          // Hot lead alert: fire OS notification when auto-scan finds a 85+ match
+          if (d.event === "ghost_approved" && d.msg) {
+            invoke("notify_high_score_lead", {
+              title: "Hot lead found 🔥",
+              body: d.msg,
+            }).catch(() => {
+              if ("Notification" in window && Notification.permission === "granted") {
+                new Notification("Hot lead found 🔥", { body: d.msg });
+              }
+            });
+            window.dispatchEvent(new CustomEvent("leads-refresh"));
+          }
         } else if (d.type === "LEAD_UPDATED" && d.data) {
           window.dispatchEvent(new CustomEvent("lead-updated", { detail: d.data }));
         } else if (d.type === "HOT_X_LEAD" && d.data) {

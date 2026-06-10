@@ -2,7 +2,6 @@ import Icon from "../../shared/components/Icon";
 import type React from "react";
 import type { Lead, LogLine, OperationProgress, View } from "../../types";
 import { getMark, getTone, leadDisplayHeading, leadSignal } from "../../shared/lib/leadUtils";
-
 const warmSurface = "rgba(var(--white-rgb), 0.64)";
 const warmSurfaceStrong = "rgba(var(--white-rgb), 0.78)";
 const warmBorder = "rgba(var(--accent-rgb), 0.16)";
@@ -132,6 +131,44 @@ export function DashboardView({
     .slice(0, 4);
   const busy = scanning || reevaluating || cleaning;
   const latest = logs[0];
+
+  // --- Skills gap analysis (computed from leads prop, no API needed) ---
+  const topGaps = (() => {
+    const cnt: Record<string, number> = {};
+    const scored = active.filter(l => (l.score || 0) >= 50);
+    for (const lead of scored) {
+      for (const g of (lead.gaps as string[] | undefined) || []) {
+        const key = String(g).toLowerCase().trim().replace(/\.+$/, "");
+        if (key) cnt[key] = (cnt[key] || 0) + 1;
+      }
+    }
+    const total = scored.length || 1;
+    return Object.entries(cnt)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([gap, count]) => ({ gap, count, pct: Math.round(count / total * 100) }));
+  })();
+
+  // --- Source performance (computed from leads prop) ---
+  const sourceStats = (() => {
+    const s: Record<string, { total: number; scoreSum: number; scored: number; applied: number }> = {};
+    for (const lead of active) {
+      const src = ((lead.platform as string) || "unknown").toLowerCase();
+      if (!s[src]) s[src] = { total: 0, scoreSum: 0, scored: 0, applied: 0 };
+      s[src].total += 1;
+      if ((lead.score || 0) > 0) { s[src].scored += 1; s[src].scoreSum += (lead.score || 0); }
+      if (lead.status === "applied") s[src].applied += 1;
+    }
+    return Object.entries(s)
+      .map(([src, d]) => ({
+        source: src,
+        total: d.total,
+        avgScore: d.scored > 0 ? Math.round(d.scoreSum / d.scored) : 0,
+        applied: d.applied,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 8);
+  })();
 
   return (
     <div className="scroll" style={{ padding: 24, flex: 1, height: "100%", minHeight: 0 }}>
@@ -312,6 +349,67 @@ export function DashboardView({
           )}
         </div>
       </section>
+
+      {/* ── Skills gap analysis ── */}
+      {topGaps.length > 0 && (
+        <section style={{ marginBottom: 14, padding: 16, borderRadius: 8, border: `1px solid ${warmBorder}`, background: warmSurface, boxShadow: "var(--shadow-sm)" }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <h3>Skills gap analysis</h3>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>
+                Most common gaps across your {active.filter(l => (l.score || 0) >= 50).length} scored leads — add these skills to your profile to increase match rates.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 8 }}>
+            {topGaps.map(({ gap, count, pct }) => (
+              <div key={gap} style={{ background: "var(--paper-3)", border: `1px solid ${warmBorder}`, borderRadius: 7, padding: "8px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", textTransform: "capitalize", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{gap}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{count} lead{count !== 1 ? "s" : ""}</div>
+                </div>
+                <div style={{ minWidth: 36, textAlign: "right" }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 800,
+                    color: pct >= 40 ? "var(--bad)" : pct >= 20 ? "var(--warn)" : "var(--ink-2)",
+                  }}>{pct}%</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Source performance ── */}
+      {sourceStats.length > 0 && (
+        <section style={{ marginBottom: 14, padding: 16, borderRadius: 8, border: `1px solid ${warmBorder}`, background: warmSurface, boxShadow: "var(--shadow-sm)" }}>
+          <h3 style={{ marginBottom: 4 }}>Source performance</h3>
+          <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>Which sources are giving you the best leads.</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${warmBorder}` }}>
+                  {["Source", "Found", "Avg score", "Applied"].map(h => (
+                    <th key={h} style={{ textAlign: h === "Source" ? "left" : "right", padding: "4px 10px", fontWeight: 700, color: "var(--ink-2)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sourceStats.map(({ source, total, avgScore, applied }) => (
+                  <tr key={source} style={{ borderBottom: `1px solid ${warmBorder}` }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600, textTransform: "capitalize" }}>{source}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: "var(--ink-2)" }}>{total}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: avgScore >= 70 ? "var(--ok)" : avgScore >= 50 ? "var(--warn)" : "var(--ink-3)" }}>
+                      {avgScore > 0 ? avgScore : "—"}
+                    </td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: applied > 0 ? "var(--green-ink)" : "var(--ink-3)" }}>{applied || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
