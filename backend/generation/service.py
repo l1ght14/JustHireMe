@@ -52,6 +52,12 @@ class GenerationService:
         if include_contacts:
             try:
                 contacts = await self.lookup_contact(lead)
+                # The LLM-generated cold_email from drafting.py is higher quality
+                # than the template-based personalized_email from contact_lookup.py.
+                # Prefer it when available so the contact card shows the better email.
+                llm_cold_email = (package.get("cold_email") or "").strip()
+                if llm_cold_email and contacts.get("primary_contact"):
+                    contacts["primary_contact"]["personalized_email"] = llm_cold_email
             except Exception as exc:
                 _log.warning("contact lookup skipped for %s: %s", lead.get("job_id", "?"), exc)
                 contacts = {"contacts": [], "error": str(exc)}

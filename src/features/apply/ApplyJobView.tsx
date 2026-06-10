@@ -7,6 +7,26 @@ import { roleFromLead } from "../../shared/lib/leadUtils";
 const CUSTOMIZE_START_TIMEOUT_MS = 10000;
 const CUSTOMIZE_WATCHDOG_MS = 12000;
 
+/**
+ * Build a mailto: URL pre-filled with To, Subject, and Body.
+ * Parses "Subject: ..." from the first line of emailText if present.
+ */
+function buildMailtoUrl(toEmail: string, emailText: string, fallbackSubject: string): string {
+  const lines = emailText.split("\n");
+  let subject = fallbackSubject;
+  let body = emailText;
+
+  if (lines[0].trim().toLowerCase().startsWith("subject:")) {
+    subject = lines[0].replace(/^subject:\s*/i, "").trim();
+    // Skip blank lines after subject to get the body
+    let bodyStart = 1;
+    while (bodyStart < lines.length && lines[bodyStart].trim() === "") bodyStart++;
+    body = lines.slice(bodyStart).join("\n").trim();
+  }
+
+  return `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 function withDeadline<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -322,10 +342,29 @@ export function ApplyJobView({ port, api, leads, openDrawer, initialInput, autoF
                     <div className="eyebrow">Direct line</div>
                     <div className="col gap-2" style={{ marginTop: 8, fontSize: 12.5, color: "var(--ink-2)" }}>
                       {primaryContact.email && (
-                        <button className="btn btn-ghost" style={{ justifyContent: "space-between" }} onClick={() => copyText(primaryContact.email || "")}>
-                          <span className="mono" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{primaryContact.email}</span>
-                          <span>Copy</span>
-                        </button>
+                        <div className="row gap-2">
+                          <button
+                            className="btn btn-ghost"
+                            style={{ flex: 1, justifyContent: "space-between" }}
+                            onClick={() => copyText(primaryContact.email || "")}
+                          >
+                            <span className="mono" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{primaryContact.email}</span>
+                            <span>Copy</span>
+                          </button>
+                          {primaryContact.personalized_email && (
+                            <button
+                              className="btn btn-primary"
+                              style={{ fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }}
+                              onClick={() => openUrl(buildMailtoUrl(
+                                primaryContact.email || "",
+                                primaryContact.personalized_email || "",
+                                `${liveLead?.title || "role"} at ${liveLead?.company || "your company"}`,
+                              ))}
+                            >
+                              Send Email
+                            </button>
+                          )}
+                        </div>
                       )}
                       {primaryContact.linkedin_url && (
                         <button className="btn btn-ghost" style={{ justifyContent: "space-between" }} onClick={() => copyText(primaryContact.linkedin_url || "")}>
@@ -342,7 +381,24 @@ export function ApplyJobView({ port, api, leads, openDrawer, initialInput, autoF
                     <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
                       <div className="row" style={{ justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
                         <span className="eyebrow">Cold email</span>
-                        <button className="btn btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} onClick={() => copyText(primaryContact.personalized_email || "")}>Copy</button>
+                        <div className="row gap-2">
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 11, padding: "3px 8px" }}
+                            onClick={() => copyText(primaryContact.personalized_email || "")}
+                          >Copy</button>
+                          {primaryContact.email && (
+                            <button
+                              className="btn btn-primary"
+                              style={{ fontSize: 11, padding: "3px 10px" }}
+                              onClick={() => openUrl(buildMailtoUrl(
+                                primaryContact.email || "",
+                                primaryContact.personalized_email || "",
+                                `${liveLead?.title || "role"} at ${liveLead?.company || "your company"}`,
+                              ))}
+                            >Send</button>
+                          )}
+                        </div>
                       </div>
                       <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{primaryContact.personalized_email}</div>
                     </div>
@@ -389,15 +445,32 @@ export function ApplyJobView({ port, api, leads, openDrawer, initialInput, autoF
             {(liveLead.outreach_reply || liveLead.outreach_dm || liveLead.outreach_email || (liveLead.fit_bullets?.length ?? 0) > 0) && (
               <div className="card" style={{ padding: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
                 {[
-                  ["3-line pitch", liveLead.outreach_reply],
-                  ["Cold email", liveLead.outreach_email],
-                  ["LinkedIn note", liveLead.outreach_dm],
-                  ["Fit bullets", (liveLead.fit_bullets || []).join("\n")],
-                ].filter(([, value]) => Boolean(value)).map(([label, value]) => (
+                  { label: "3-line pitch",  value: liveLead.outreach_reply,  isEmail: false },
+                  { label: "Cold email",    value: liveLead.outreach_email,  isEmail: true  },
+                  { label: "LinkedIn note", value: liveLead.outreach_dm,     isEmail: false },
+                  { label: "Fit bullets",   value: (liveLead.fit_bullets || []).join("\n"), isEmail: false },
+                ].filter(({ value }) => Boolean(value)).map(({ label, value, isEmail }) => (
                   <div key={label} style={{ background: "var(--paper-3)", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 12px" }}>
                     <div className="row" style={{ justifyContent: "space-between", gap: 8, marginBottom: 7 }}>
                       <span className="eyebrow">{label}</span>
-                      <button className="btn btn-ghost" style={{ fontSize: 11, padding: "3px 8px" }} onClick={() => copyText(String(value))}>Copy</button>
+                      <div className="row gap-2">
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 11, padding: "3px 8px" }}
+                          onClick={() => copyText(String(value))}
+                        >Copy</button>
+                        {isEmail && primaryContact?.email && (
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 11, padding: "3px 10px" }}
+                            onClick={() => openUrl(buildMailtoUrl(
+                              primaryContact.email || "",
+                              String(value),
+                              `${liveLead?.title || "role"} at ${liveLead?.company || "your company"}`,
+                            ))}
+                          >Send</button>
+                        )}
+                      </div>
                     </div>
                     <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{value}</div>
                   </div>
