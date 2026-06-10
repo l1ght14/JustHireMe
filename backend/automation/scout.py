@@ -14,6 +14,7 @@ from discovery.sources import ats as ats_sources
 from discovery.sources import hackernews as hn_sources
 from discovery.sources import glassdoor as glassdoor_sources
 from discovery.sources import indeed as indeed_sources
+from discovery.sources import linkedin as linkedin_sources
 from discovery.sources import naukri as naukri_sources
 from discovery.sources import rss as rss_sources
 from discovery.sources import web as web_sources
@@ -53,6 +54,7 @@ _SOURCE_CAPS = {
     "indeed": 40,
     "naukri": 40,
     "glassdoor": 45,
+    "linkedin": 40,
 }
 
 _FRESHER_TERMS = (
@@ -563,6 +565,12 @@ def run(
                 processed_leads.extend(naukri_sources.scrape_naukri_target(target, headed=headed))
             elif glassdoor_sources.is_glassdoor_target(target):
                 processed_leads.extend(glassdoor_sources.scrape_glassdoor_target(target, headed=headed))
+            elif linkedin_sources.is_linkedin_target(target):
+                processed_leads.extend(linkedin_sources.scrape_linkedin_target(
+                    target,
+                    li_at_cookie=linkedin_cookie or "",
+                    headed=headed,
+                ))
             elif _is_rss_target(target):
                 processed_leads.extend(asyncio.run(_scrape_rss(target)))
             elif target.startswith("site:"):
