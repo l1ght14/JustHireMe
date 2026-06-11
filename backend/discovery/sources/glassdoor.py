@@ -33,7 +33,7 @@ from urllib.parse import quote_plus, quote
 import httpx
 
 from discovery.normalizer import is_recent
-from discovery.sources.web import Leads, SCOUT_EXTRACT_SYSTEM
+from discovery.sources.web import Leads
 from core.logging import get_logger
 
 _log = get_logger(__name__)
@@ -279,14 +279,18 @@ def _process_job_listing(jv: dict) -> dict | None:
     import html2text as _h2t
     raw_desc = job.get("description", "")
     if raw_desc:
-        h = _h2t.HTML2Text(); h.ignore_links = True; h.body_width = 0
+        h = _h2t.HTML2Text()
+        h.ignore_links = True
+        h.body_width = 0
         desc = h.handle(raw_desc).strip()[:1200]
     else:
         desc = ""
 
     desc_parts = [desc]
-    if location:   desc_parts.append(f"Location: {location}")
-    if salary_str: desc_parts.append(f"Salary: {salary_str}")
+    if location:
+        desc_parts.append(f"Location: {location}")
+    if salary_str:
+        desc_parts.append(f"Salary: {salary_str}")
 
     return {
         "title":       title,
@@ -391,8 +395,8 @@ def _build_glassdoor_search_url(keyword: str, location: str) -> str:
     """Build a Glassdoor job search URL for Playwright fallback."""
     q = quote_plus(keyword.strip())
     if location.strip():
-        l = quote_plus(location.strip())
-        return f"{_BASE_URL}/Jobs/{l}-{q}-jobs-SRCH_IL.0,{len(location)}_IC1148323_KO{len(location)+1},{len(location)+1+len(keyword)}.htm"
+        loc_slug = quote_plus(location.strip())
+        return f"{_BASE_URL}/Jobs/{loc_slug}-{q}-jobs-SRCH_IL.0,{len(location)}_IC1148323_KO{len(location)+1},{len(location)+1+len(keyword)}.htm"
     return f"{_BASE_URL}/Jobs/{q}-jobs-SRCH_KO0,{len(keyword)}.htm"
 
 
@@ -445,7 +449,9 @@ async def _crawl_glassdoor(url: str, headed: bool = False) -> str:
         html_content = await pg.content()
         await br.close()
 
-    h = html2text.HTML2Text(); h.ignore_links = False; h.body_width = 0
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0
     return h.handle(html_content)
 
 

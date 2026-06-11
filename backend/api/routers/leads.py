@@ -343,8 +343,8 @@ def create_router(manager) -> APIRouter:
         """
         leads = await asyncio.to_thread(repo.leads.get_all_leads)
         candidates = [
-            l for l in leads
-            if l.get("status") != "discarded" and (l.get("score") or 0) >= min_score
+            lead for lead in leads
+            if lead.get("status") != "discarded" and (lead.get("score") or 0) >= min_score
         ]
 
         from collections import Counter
@@ -415,7 +415,7 @@ def create_router(manager) -> APIRouter:
             raise HTTPException(status_code=404, detail="Lead not found")
 
         profile = await asyncio.to_thread(repo.profile.get_profile)
-        settings = await asyncio.to_thread(repo.settings.get_settings)
+        _ = await asyncio.to_thread(repo.settings.get_settings)  # reserved for future use
 
         from llm import call_raw
 
@@ -450,7 +450,7 @@ def create_router(manager) -> APIRouter:
         try:
             result = await asyncio.to_thread(call_raw, system, user, step="generator")
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"LLM call failed: {exc}")
+            raise HTTPException(status_code=500, detail=f"LLM call failed: {exc}") from exc
 
         # Save to lead's interview_prep field
         try:
@@ -492,7 +492,7 @@ def create_router(manager) -> APIRouter:
         Helps the user see which job sources are yielding the best results.
         """
         leads = await asyncio.to_thread(repo.leads.get_all_leads)
-        non_discarded = [l for l in leads if l.get("status") != "discarded"]
+        non_discarded = [lead for lead in leads if lead.get("status") != "discarded"]
 
         from collections import defaultdict
         buckets: dict = defaultdict(lambda: {

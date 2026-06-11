@@ -17,7 +17,7 @@ Country codes for `country` parameter:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 import httpx
@@ -225,12 +225,17 @@ async def _fetch_graphql_page(
 
         # Build a clean description text
         import html2text as _h2t
-        _h = _h2t.HTML2Text(); _h.ignore_links = True; _h.body_width = 0
+        _h = _h2t.HTML2Text()
+        _h.ignore_links = True
+        _h.body_width = 0
         desc_text = _h.handle(description_html).strip()[:1200] if description_html else ""
         desc_parts = [desc_text]
-        if loc_short:   desc_parts.append(f"Location: {loc_short}")
-        if salary:      desc_parts.append(f"Salary: {salary}")
-        if job_type:    desc_parts.append(f"Type: {job_type}")
+        if loc_short:
+            desc_parts.append(f"Location: {loc_short}")
+        if salary:
+            desc_parts.append(f"Salary: {salary}")
+        if job_type:
+            desc_parts.append(f"Type: {job_type}")
         description = " | ".join(p for p in desc_parts if p.strip())
 
         # dateOnIndeed is a Unix timestamp in **milliseconds** (confirmed by live test).
@@ -303,8 +308,8 @@ async def _scrape_indeed_api(
 def _build_fallback_url(query: str, location: str, country: str, days: int = 14) -> str:
     domain, _ = _resolve_country(country)
     q = quote_plus(query.strip())
-    l = quote_plus(location.strip()) if location.strip() else "remote"
-    return f"https://{domain}/jobs?q={q}&l={l}&fromage={days}&sort=date"
+    loc_encoded = quote_plus(location.strip()) if location.strip() else "remote"
+    return f"https://{domain}/jobs?q={q}&l={loc_encoded}&fromage={days}&sort=date"
 
 
 async def _crawl_indeed_playwright(url: str, headed: bool = False) -> str:
@@ -333,7 +338,9 @@ async def _crawl_indeed_playwright(url: str, headed: bool = False) -> str:
         html_content = await pg.content()
         await br.close()
 
-    h = html2text.HTML2Text(); h.ignore_links = False; h.body_width = 0
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0
     return h.handle(html_content)
 
 

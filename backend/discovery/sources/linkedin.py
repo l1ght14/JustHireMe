@@ -26,7 +26,7 @@ import asyncio
 from urllib.parse import quote_plus
 
 from discovery.normalizer import is_recent
-from discovery.sources.web import Leads, SCOUT_EXTRACT_SYSTEM
+from discovery.sources.web import Leads
 from core.logging import get_logger
 
 _log = get_logger(__name__)

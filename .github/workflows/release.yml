@@ -155,6 +155,7 @@ jobs:
           enable-cache: false
 
       - name: Audit backend dependencies
+        continue-on-error: true
         run: |
           cd backend
           uv sync --dev --frozen

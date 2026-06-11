@@ -128,12 +128,6 @@ async def delete_achievement_endpoint(entry: str, service=Depends(get_profile_se
     return {"ok": True}
 
 
-@router.delete("/profile/achievement/{entry:path}")
-async def delete_achievement_endpoint(entry: str, service=Depends(get_profile_service)):
-    await _call_service(service.delete_achievement, entry)
-    return {"ok": True}
-
-
 @router.get("/profile/completeness")
 async def profile_completeness_endpoint(service=Depends(get_profile_service)):
     """
