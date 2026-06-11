@@ -57,7 +57,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGQkMxRjE0NkMzQjVGNjYKUldSbVh6dHNGQis4SDVBNkN5dDFGdkZFelNCM3hqZVlaVG11OFlZVGowZjN2ZUUxYlVVdUlXWi8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGMDI3RTgwM0E1NEUzNDIKUldSQzQxUTZnSDRDejdRbFJoWWRTUVpOKzlST0E4aDB1dzY3WjhOMkd3R01VVlZOK0JUNFBDdDcK",
       "endpoints": [
         "https://github.com/l1ght14/JustHireMe/releases/latest/download/latest.json"
       ],
