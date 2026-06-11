@@ -40,6 +40,10 @@ hidden = [
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     "fastapi", "fastapi.middleware.cors",
+    # python-multipart must be explicitly bundled: FastAPI 0.136+ checks for
+    # it at route-registration time (not request time), so the app crashes on
+    # startup if the multipart package is absent from the PyInstaller bundle.
+    "multipart", "multipart.multiparser",
     "anthropic", "openai", "instructor",
     "langgraph", "langgraph.graph",
     "apscheduler", "apscheduler.schedulers.asyncio",
