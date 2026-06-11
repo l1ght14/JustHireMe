@@ -195,25 +195,24 @@ export function useWS() {
             const lead = d.data as Lead;
             new Notification("Hot X lead", { body: `${lead.company}: ${lead.title}` });
           }
-        } else if (d.type === "FOLLOWUP_REMINDER") {
-          // Follow-up reminder: fired by the scheduler when an applied job
-          // is 7 days old (or the user-configured followup_days value).
-          const notifTitle = "Time to follow up 👋";
-          const notifBody  = d.msg || `Follow up on ${d.title} @ ${d.company}`;
-          // Use Tauri native notification (shows as OS toast on Windows/macOS/Linux)
-          invoke("notify_high_score_lead", {
-            title: notifTitle,
-            body:  notifBody,
-          }).catch(() => {
-            // Fallback to browser Notification API if Tauri invoke fails
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(notifTitle, { body: notifBody });
-            }
-          });
-          // Also dispatch a DOM event so the Pipeline view can highlight the lead
-          window.dispatchEvent(new CustomEvent("followup-reminder", {
-            detail: { job_id: d.job_id, title: d.title, company: d.company },
-          }));
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ev = d as any;
+          if (ev.type === "FOLLOWUP_REMINDER") {
+            const notifTitle = "Time to follow up 👋";
+            const notifBody  = ev.msg || `Follow up on ${ev.title} @ ${ev.company}`;
+            invoke("notify_high_score_lead", {
+              title: notifTitle,
+              body:  notifBody,
+            }).catch(() => {
+              if ("Notification" in window && Notification.permission === "granted") {
+                new Notification(notifTitle, { body: notifBody });
+              }
+            });
+            window.dispatchEvent(new CustomEvent("followup-reminder", {
+              detail: { job_id: ev.job_id, title: ev.title, company: ev.company },
+            }));
+          }
         }
       } catch (err) {
         const preview = typeof e.data === "string" ? e.data.slice(0, 200) : "";
