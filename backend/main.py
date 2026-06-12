@@ -4,17 +4,59 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import sys
 import time
 
+# ── Startup trace log ────────────────────────────────────────────────────────
+# Written before any heavy imports so we can pinpoint exactly which import
+# causes the sidecar to crash in the PyInstaller bundle.
+def _trace(msg: str) -> None:
+    """Write a timestamped trace line to both stderr and a log file."""
+    line = f"[JHM-TRACE] {msg}\n"
+    try:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        _log_dir = os.environ.get("JHM_APP_DATA_DIR") or os.path.join(
+            os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "JustHireMe"
+        )
+        os.makedirs(_log_dir, exist_ok=True)
+        with open(os.path.join(_log_dir, "startup_trace.log"), "a", encoding="utf-8") as _f:
+            _f.write(line)
+    except Exception:
+        pass
+
+
+_trace("main.py started")
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import WebSocket
 
+_trace("fastapi imported")
+
 from api.app import create_app
+
+_trace("api.app imported")
+
 from api.auth import create_api_token, require_ws_token
+
+_trace("api.auth imported")
+
 from api.scheduler import create_ghost_tick, create_followup_tick, create_lifespan, create_scheduler
+
+_trace("api.scheduler imported")
+
 from api.websocket import ConnectionManager, agent_event_action as _agent_event_action  # noqa: F401
+
+_trace("api.websocket imported")
+
 from core.logging import get_logger
+
+_trace("core.logging imported")
 
 _log = get_logger(__name__)
 
@@ -35,10 +77,14 @@ def _reserve_socket(preferred: int = 0) -> socket.socket:
     return s
 
 
+_trace("creating module-level singletons")
 _UP = time.monotonic()
 _sched = create_scheduler()
+_trace("scheduler created")
 _API_TOKEN: str = create_api_token()
+_trace("api token created")
 cm = ConnectionManager()
+_trace("ConnectionManager created")
 
 
 async def _require_ws_token(ws: WebSocket) -> bool:
@@ -46,10 +92,14 @@ async def _require_ws_token(ws: WebSocket) -> bool:
 
 
 def build_gateway_app():
+    _trace("build_gateway_app: start")
     ghost_tick    = create_ghost_tick(cm)
+    _trace("build_gateway_app: ghost_tick created")
     followup_tick = create_followup_tick(cm)
+    _trace("build_gateway_app: followup_tick created")
     lifespan = create_lifespan(_sched, ghost_tick, _log, followup_tick=followup_tick)
-    return create_app(
+    _trace("build_gateway_app: lifespan created")
+    app = create_app(
         lifespan=lifespan,
         token_getter=lambda: _API_TOKEN,
         started_at=_UP,
@@ -59,6 +109,8 @@ def build_gateway_app():
         logger=_log,
         websocket_token_guard=_require_ws_token,
     )
+    _trace("build_gateway_app: create_app OK")
+    return app
 
 
 _GATEWAY_APP_SINGLETON = None
@@ -94,22 +146,18 @@ if __name__ == "__main__":
     import traceback
     import uvicorn
 
+    _trace("__main__ entered")
     args = _parse_args()
 
     # --- Startup diagnostics (wrapped so crash reason is always visible) ---
     try:
+        _trace("calling build_gateway_app")
         gateway_app = build_gateway_app()
+        _trace("build_gateway_app returned OK")
     except Exception as _startup_exc:
         _tb = traceback.format_exc()
-        # Write a log file the user can inspect
-        try:
-            from core.paths import app_data_dir as _app_data_dir
-            _log_path = _app_data_dir() / "startup_error.log"
-            _log_path.parent.mkdir(parents=True, exist_ok=True)
-            _log_path.write_text(_tb, encoding="utf-8")
-        except Exception:
-            pass  # don't let log write failure hide the real error
-        # Print to stdout so Tauri captures the actual exception as last output
+        _trace(f"build_gateway_app FAILED: {type(_startup_exc).__name__}: {_startup_exc}")
+        _trace(_tb)
         print(f"ERROR: startup failed: {type(_startup_exc).__name__}: {_startup_exc}", flush=True)
         print(_tb, flush=True)
         sys.exit(1)
@@ -119,7 +167,9 @@ if __name__ == "__main__":
     # the same socket to uvicorn — no re-bind, no port-steal race.
     sock = _reserve_socket(args.port)
     port = sock.getsockname()[1]
+    _trace(f"port reserved: {port}")
     sys.stdout.write(f"JHM_TOKEN={_API_TOKEN}\n")
     sys.stdout.write(f"PORT:{port}\n")
     sys.stdout.flush()
+    _trace("token+port announced — starting uvicorn")
     uvicorn.Server(uvicorn.Config(gateway_app, log_level="warning")).run(sockets=[sock])
