@@ -1053,19 +1053,14 @@ jobs:
           else
             promotion=(--latest)
           fi
+          # Delete any existing release for this tag (may be a stale prerelease
+          # from a previous failed run that can't be promoted to --latest).
           if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --clobber
-            gh release edit "$tag" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "JustHireMe ${tag}" \
-              --notes-file "../release-notes.md" \
-              "${promotion[@]}"
-          else
-            gh release create "$tag" "${assets[@]}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "JustHireMe ${tag}" \
-              --notes-file "../release-notes.md" \
-              "${promotion[@]}"
+            echo "Deleting existing release for ${tag} before recreating..."
+            gh release delete "$tag" --repo "${GITHUB_REPOSITORY}" --yes || true
           fi
+          gh release create "$tag" "${assets[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "JustHireMe ${tag}" \
+            --notes-file "../release-notes.md" \
+            "${promotion[@]}"
