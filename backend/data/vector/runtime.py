@@ -364,7 +364,7 @@ def _download(url: str, archive_path: Path) -> None:
 
     request = urllib.request.Request(url, headers={"User-Agent": "JustHireMe-runtime-installer"})
     context = _https_ssl_context() if parsed.scheme == "https" else None
-    with urllib.request.urlopen(request, timeout=60, context=context) as response, archive_path.open("wb") as target:
+    with urllib.request.urlopen(request, timeout=600, context=context) as response, archive_path.open("wb") as target:
         total = int(response.headers.get("Content-Length") or 0)
         _stream_to_file(response, target, total)
 
