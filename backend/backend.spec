@@ -62,7 +62,26 @@ hidden = [
     "services", "services.apps", "services.auth",
     "graph_service", "graph_service.stats", "graph_service.helpers",
     "llm", "logger",
-] + collect_submodules("contracts") + collect_submodules("data") + collect_submodules("gateway") + collect_submodules("services") + collect_submodules("graph_service")
+] + (
+    collect_submodules("contracts")
+    + collect_submodules("data")
+    + collect_submodules("gateway")
+    + collect_submodules("services")
+    + collect_submodules("graph_service")
+    # discovery, ranking, generation, profile, automation, api, llm all use
+    # importlib.import_module() for lazy/circular-import avoidance. PyInstaller
+    # cannot detect dynamic imports through static analysis, so every backend
+    # package must be explicitly collected.
+    + collect_submodules("discovery")
+    + collect_submodules("ranking")
+    + collect_submodules("generation")
+    + collect_submodules("profile")
+    + collect_submodules("automation")
+    + collect_submodules("api")
+    + collect_submodules("llm")
+    + collect_submodules("core")
+    + collect_submodules("models")
+)
 
 if include_graph:
     hidden += ["kuzu"]
