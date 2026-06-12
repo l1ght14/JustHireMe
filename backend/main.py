@@ -91,10 +91,30 @@ def _parse_args():
 
 
 if __name__ == "__main__":
+    import traceback
     import uvicorn
 
     args = _parse_args()
-    gateway_app = build_gateway_app()
+
+    # --- Startup diagnostics (wrapped so crash reason is always visible) ---
+    try:
+        gateway_app = build_gateway_app()
+    except Exception as _startup_exc:
+        _tb = traceback.format_exc()
+        # Write a log file the user can inspect
+        try:
+            from core.paths import app_data_dir as _app_data_dir
+            _log_path = _app_data_dir() / "startup_error.log"
+            _log_path.parent.mkdir(parents=True, exist_ok=True)
+            _log_path.write_text(_tb, encoding="utf-8")
+        except Exception:
+            pass  # don't let log write failure hide the real error
+        # Print to stdout so Tauri captures the actual exception as last output
+        print(f"ERROR: startup failed: {type(_startup_exc).__name__}: {_startup_exc}", flush=True)
+        print(_tb, flush=True)
+        sys.exit(1)
+    # -----------------------------------------------------------------------
+
     # Hold the bound socket, announce the port only after we own it, then hand
     # the same socket to uvicorn — no re-bind, no port-steal race.
     sock = _reserve_socket(args.port)
