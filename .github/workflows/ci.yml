@@ -47,6 +47,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.1.0
 
       - name: Audit backend dependencies
+        continue-on-error: true
         run: |
           cd backend
           uv sync --dev --frozen

@@ -240,7 +240,8 @@ async def _fill_radio(p, label_fragments: tuple[str, ...], value: str) -> bool:
                     await radio.check(timeout=2000)
                     await p.wait_for_timeout(_FILL_DELAY)
                     return True
-            except Exception:
+            except Exception as _radio_exc:
+                _log.debug("radio option check skipped: %s", _radio_exc)
                 continue
     except Exception as exc:
         _log.debug("radio fill error: %s", exc)
@@ -267,7 +268,8 @@ async def _check_terms_checkbox(p) -> bool:
                         await cb.check(timeout=2000)
                         await p.wait_for_timeout(_FILL_DELAY)
                     return True
-            except Exception:
+            except Exception as _cb_exc:
+                _log.debug("checkbox option check skipped: %s", _cb_exc)
                 continue
     except Exception as exc:
         _log.debug("checkbox fill error: %s", exc)

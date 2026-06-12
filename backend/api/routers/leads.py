@@ -464,8 +464,8 @@ def create_router(manager) -> APIRouter:
             )
             conn.commit()
             conn.close()
-        except Exception:
-            pass  # Don't fail the response if save fails
+        except Exception as _save_exc:
+            logging.getLogger(__name__).debug("interview_prep save skipped for %s: %s", job_id, _save_exc)
 
         return {"job_id": job_id, "interview_prep": result}
 
