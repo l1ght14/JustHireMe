@@ -3,12 +3,19 @@ import type { LogLine } from "../../types";
 
 type ActivityTab = "all" | "scout" | "eval" | "customize" | "system";
 
+const _SCOUT_SRCS = new Set([
+  "scout", "scout_start", "scout_done", "scout_source_detail",
+  "query_gen_start", "query_gen_done", "query_gen_target", "query_gen_error",
+  "free_source_start", "free_source_done", "free_source_detail",
+  "x_signal_start", "x_signal_done",
+]);
+
 function visibleForTab(logs: LogLine[], tab: ActivityTab) {
   return logs.filter(l => {
     const message = l.msg.toLowerCase();
     if (tab === "all") return l.kind !== "heartbeat";
-    if (tab === "scout") return l.src === "scout" || (l.kind === "agent" && message.includes("scout"));
-    if (tab === "eval") return l.src === "eval" || (l.kind === "agent" && (message.includes("eval") || message.includes("scor")));
+    if (tab === "scout") return _SCOUT_SRCS.has(l.src) || (l.kind === "agent" && (message.includes("scout") || message.includes("scan") || message.includes("target") || message.includes("source")));
+    if (tab === "eval") return l.src === "eval" || l.src === "eval_scored" || l.src === "eval_start" || l.src === "eval_done" || l.src === "eval_error" || l.src === "eval_fallback_summary" || (l.kind === "agent" && (message.includes("eval") || message.includes("scor")));
     if (tab === "customize") return l.src === "apply" || (l.kind === "agent" && (message.includes("custom") || message.includes("generat") || message.includes("package")));
     if (tab === "system") return l.kind === "system";
     return true;

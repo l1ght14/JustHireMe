@@ -152,20 +152,25 @@ export const GLOBAL_SOURCE_PRESET = [
   "site:cutshort.io/jobs,",
 ].join("\n");
 
+// India preset — uses dedicated scrapers (indeed:, naukri:) for the major
+// India job boards so results are filtered by your target role, not just
+// "any job on the site". Edit the queries to match YOUR role.
 export const INDIA_SOURCE_PRESET = [
-  "site:wellfound.com/jobs India,",
-  "site:cutshort.io/jobs India startup,",
-  "site:instahyre.com jobs India,",
-  "site:naukri.com jobs India,",
-  "site:foundit.in jobs India,",
-  "site:internshala.com/jobs India,",
-  "site:linkedin.com/jobs India,",
-  "site:indeed.com/jobs India,",
-  "site:glassdoor.co.in Job India,",
+  "# --- India job boards (edit queries to match your role) ---,",
+  "indeed:software engineer:India:India,",
+  "indeed:python developer:India:India,",
+  "naukri:software engineer:India,",
+  "naukri:python developer:India,",
+  "# --- ATS boards (role-agnostic, filtered by profile after scrape) ---,",
   "site:boards.greenhouse.io India,",
   "site:jobs.lever.co India,",
   "site:jobs.ashbyhq.com India,",
   "site:apply.workable.com India,",
+  "# --- Startup / curated boards ---,",
+  "site:wellfound.com/jobs India,",
+  "site:cutshort.io/jobs India,",
+  "site:instahyre.com India,",
+  "site:foundit.in India,",
 ].join("\n");
 
 export const KEY_FIELD: Record<string, keyof Cfg> = {
